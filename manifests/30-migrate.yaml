@@ -24,6 +24,3 @@ spec:
           envFrom:
             - configMapRef: { name: suncoast-crm-api }
             - secretRef: { name: suncoast-crm-database }
-          resources:
-            requests: { cpu: 25m, memory: 64Mi }
-            limits: { cpu: 250m, memory: 256Mi }

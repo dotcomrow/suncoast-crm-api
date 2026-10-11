@@ -110,6 +110,3 @@ spec:
               reconcile_topic "$KAFKA_EVENT_TOPIC" 3 1209600000 3600000
               reconcile_topic "$KAFKA_DLQ_TOPIC" 3 7776000000 86400000
               echo "CRM Kafka topic setup complete"
-          resources:
-            requests: { cpu: 25m, memory: 128Mi }
-            limits: { cpu: 300m, memory: 256Mi }

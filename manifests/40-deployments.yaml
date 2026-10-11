@@ -35,9 +35,6 @@ spec:
           startupProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5, failureThreshold: 24 }
           readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 10, timeoutSeconds: 3 }
           livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 20, timeoutSeconds: 3 }
-          resources:
-            requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 512Mi }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -71,9 +68,6 @@ spec:
           startupProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 5, failureThreshold: 24 }
           readinessProbe: { httpGet: { path: /readyz, port: health }, periodSeconds: 10, timeoutSeconds: 3 }
           livenessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 20, timeoutSeconds: 3 }
-          resources:
-            requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 512Mi }
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

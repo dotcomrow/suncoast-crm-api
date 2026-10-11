@@ -123,10 +123,16 @@ spec:
               EOSQL
 
               echo "Registering ${APP_LOGIN} as a Vault static database role"
-              jq -nc \
-                --arg username "$APP_LOGIN" \
-                '{db_name:"yugabyte",username:$username,rotation_statements:["ALTER ROLE \\\"{{username}}\\\" WITH PASSWORD '\''{{password}}'\''"],rotation_period:"720h"}' \
-                | vault write "yugabyte-db/static-roles/${VAULT_DB_ROLE}" - >/dev/null
+              cat <<EOF | vault write "yugabyte-db/static-roles/${VAULT_DB_ROLE}" - >/dev/null
+              {
+                "db_name": "yugabyte",
+                "username": "${APP_LOGIN}",
+                "rotation_statements": [
+                  "ALTER ROLE \"{{username}}\" WITH PASSWORD '{{password}}'"
+                ],
+                "rotation_period": "720h"
+              }
+              EOF
 
               vault policy write suncoast-crm-yugabyte - <<EOF
               path "yugabyte-db/static-creds/${VAULT_DB_ROLE}" {
@@ -147,6 +153,3 @@ spec:
             - name: vault-root-token
               mountPath: /vault-token
               readOnly: true
-          resources:
-            requests: { cpu: 25m, memory: 64Mi }
-            limits: { cpu: 250m, memory: 256Mi }
