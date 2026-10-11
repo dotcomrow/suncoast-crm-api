@@ -18,7 +18,7 @@ applications -> Gravitee -> CRM API -> Yugabyte transaction
 
 Writes return `202 Accepted` and an operation URL. The API commits the operation and outbox message atomically before returning. The outbox publishes to Kafka with all-replica acknowledgement. The worker updates HubSpot, then updates the local Yugabyte projection. Callers can safely retry using the same `Idempotency-Key`.
 
-Kafka gives at-least-once delivery, not exactly-once provider writes. The HubSpot adapter therefore upserts contacts, companies, and deals by the hidden, unique `suncoast_crm_id` property. Activities map to notes and use HubSpot's existing writable, unique `hs_unique_id` property. The setup Job creates only the three required custom properties in HubSpot's existing standard property groups; it does not create or modify property groups. A retried create therefore resolves to the same HubSpot record.
+Kafka gives at-least-once delivery, not exactly-once provider writes. The HubSpot adapter therefore upserts contacts, companies, and deals by the unique `suncoast_crm_id` property. Activities map to notes and use HubSpot's existing writable, unique `hs_unique_id` property. Because Service Keys cannot mutate CRM schemas, the setup Job validates these properties but never creates or modifies HubSpot schema. A retried create therefore resolves to the same HubSpot record.
 
 ## Stable API
 
@@ -46,7 +46,7 @@ Implement `CrmProvider` in `src/providers/`, add it to `src/providers/registry.t
 
 The initial HubSpot adapter supports property CRUD for contacts, companies, deals, and activities (mapped to HubSpot notes). Association writes are reserved in the stable schema but fail explicitly until stable association names are mapped to HubSpot association type IDs; they are never silently discarded.
 
-The HubSpot Service Key must grant read/write access to contacts, companies, deals, and notes, plus schema-write permission for contacts, companies, and deals. A notes-schema scope is not required. `manifests/25-hubspot-setup.yaml` verifies the built-in notes property and creates the three required custom properties as an Argo Sync hook. If the Job fails with `403`, add the missing available scopes to the existing Service Key and sync again; the Vault value does not need to change when HubSpot keeps the same key.
+The HubSpot Service Key must grant read/write access to contacts, companies, deals, and notes. A schema-write scope is not required. Before deploying, manually create a property on each of Contacts, Companies, and Deals with label `Suncoast CRM ID`, internal name `suncoast_crm_id`, field type `Single-line text`, and unique-value enforcement enabled. `manifests/25-hubspot-setup.yaml` validates those properties and the built-in notes property as an Argo Sync hook. The Vault value does not need to change when HubSpot keeps the same key.
 
 ## Local development
 

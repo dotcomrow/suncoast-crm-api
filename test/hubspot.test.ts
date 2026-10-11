@@ -35,18 +35,20 @@ test("HubSpot adapter uses the built-in unique ID for notes", async (t) => {
   assert.deepEqual(body, { inputs: [{ id: "a", idProperty: "hs_unique_id", objectWriteTraceId: "a", properties: { email: "test@example.com", hs_unique_id: "a" } }] });
 });
 
-test("HubSpot setup reuses standard groups and does not create property groups", async (t) => {
-  const requests: Array<{ url: string; method: string; body?: Record<string, unknown> }> = [];
+test("HubSpot setup validates properties without attempting schema writes", async (t) => {
+  const requests: Array<{ url: string; method: string }> = [];
   t.mock.method(globalThis, "fetch", async (url, init) => {
-    const request = { url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined };
-    requests.push(request);
-    if (request.url.endsWith("/notes/hs_unique_id")) {
-      return new Response(JSON.stringify({ hasUniqueValue: true, modificationMetadata: { readOnlyValue: false } }), { status: 200 });
-    }
-    if (request.method === "GET") return new Response("not found", { status: 404 });
-    return new Response(JSON.stringify({}), { status: 201 });
+    requests.push({ url: String(url), method: init?.method ?? "GET" });
+    return new Response(JSON.stringify({ type: "string", hasUniqueValue: true, modificationMetadata: { readOnlyValue: false } }), { status: 200 });
   });
   await ensureHubSpotIdempotencyProperties("secret", "https://api.hubapi.test", "suncoast_crm_id");
-  assert.equal(requests.some((request) => request.url.endsWith("/groups")), false);
-  assert.deepEqual(requests.filter((request) => request.method === "POST").map((request) => request.body?.groupName), ["contactinformation", "companyinformation", "dealinformation"]);
+  assert.equal(requests.every((request) => request.method === "GET"), true);
+});
+
+test("HubSpot setup explains how to resolve a missing manual property", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response("not found", { status: 404 }));
+  await assert.rejects(
+    () => ensureHubSpotIdempotencyProperties("secret", "https://api.hubapi.test", "suncoast_crm_id"),
+    /missing required unique text property 'suncoast_crm_id'.*manually/
+  );
 });
