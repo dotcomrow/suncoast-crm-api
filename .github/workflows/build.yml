@@ -4,7 +4,7 @@ on:
     branches: [prod]
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
   packages: write
 jobs:
   test-build-push:
@@ -18,7 +18,7 @@ jobs:
       - run: npm test
       - name: Log in to GHCR
         run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: Build and push immutable image
+      - name: Build and push image
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/suncoast-crm-api
           TAG: sha-${{ github.sha }}
@@ -26,14 +26,3 @@ jobs:
           docker build -t "${IMAGE}:${TAG}" -t "${IMAGE}:latest" .
           docker push "${IMAGE}:${TAG}"
           docker push "${IMAGE}:latest"
-      - name: Pin Kubernetes manifests to the immutable image
-        env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/suncoast-crm-api
-          TAG: sha-${{ github.sha }}
-        run: |
-          perl -pi -e 's#ghcr\.io/dotcomrow/suncoast-crm-api:(?:latest|sha-[0-9a-f]+)#$ENV{IMAGE}:$ENV{TAG}#g' manifests/*.yaml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add manifests
-          git diff --cached --quiet || git commit -m "chore: deploy ${TAG} [skip ci]"
-          git push origin HEAD:prod

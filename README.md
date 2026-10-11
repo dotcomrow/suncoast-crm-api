@@ -127,9 +127,9 @@ An initial Argo Sync hook creates the database Secret before migration. An hourl
 
 ## Kubernetes and Gravitee
 
-Apply `manifests/` through Argo CD. The Service annotations let the existing Gravitee annotation controller create `/crm`, configure a health check, and refresh the generated `/openapi.json` every five minutes. The first deployment uses `latest`; after a successful build, the workflow commits the immutable `sha-...` image tag into all workload and setup manifests so Argo CD sees every subsequent release.
+Apply `manifests/` through Argo CD. The Service annotations let the existing Gravitee annotation controller create `/crm`, configure a health check, and refresh the generated `/openapi.json` every five minutes. Workloads use the operator-managed `latest` image tag with `imagePullPolicy: Always`; restart or resync the workloads after publishing a replacement image.
 
-The GitHub repository is private, so make the GHCR package readable by the cluster or attach a valid `imagePullSecret` to the `suncoast-crm-api` service account before the first sync. The workflow also requires repository Actions permission to create commits because it writes the immutable tag back to the `prod` branch.
+The GitHub repository is private, so make the GHCR package readable by the cluster or attach a valid `imagePullSecret` to the `suncoast-crm-api` service account before the first sync.
 
 The API has two replicas and a disruption budget. The worker starts with one replica because the server is resource constrained; Kafka consumer groups allow horizontal scaling later. Redis is not required in the first version—Yugabyte is the source of truth and the transactional outbox avoids a second consistency domain. Add Redis only for measured read pressure or rate limiting.
 
