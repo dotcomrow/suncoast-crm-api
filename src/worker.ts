@@ -110,7 +110,7 @@ const healthServer = createServer(async (request, response) => {
   }
   if (request.url === "/readyz") {
     try {
-      const schema = await pool.query("SELECT to_regclass('public.crm_operations') AS operations");
+      const schema = await pool.query("SELECT to_regclass('crm.crm_operations') AS operations");
       const ready = kafkaReady && Boolean(schema.rows[0]?.operations) && !shuttingDown;
       response.writeHead(ready ? 200 : 503).end(ready ? "ready" : "not ready");
     } catch {
