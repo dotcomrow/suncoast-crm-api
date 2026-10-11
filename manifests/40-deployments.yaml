@@ -24,7 +24,7 @@ spec:
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: api
-          image: ghcr.io/dotcomrow/suncoast-crm-api:latest
+          image: ghcr.io/dotcomrow/suncoast-crm-api:sha-38dee75db665dd3b8e2c10a0227f03d4ea5b89e9
           imagePullPolicy: Always
           ports: [{ name: http, containerPort: 8080 }]
           envFrom:
@@ -59,7 +59,7 @@ spec:
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: worker
-          image: ghcr.io/dotcomrow/suncoast-crm-api:latest
+          image: ghcr.io/dotcomrow/suncoast-crm-api:sha-38dee75db665dd3b8e2c10a0227f03d4ea5b89e9
           imagePullPolicy: Always
           command: ["node", "dist/worker.js"]
           ports: [{ name: health, containerPort: 8081 }]

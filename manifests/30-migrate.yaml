@@ -18,7 +18,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: ghcr.io/dotcomrow/suncoast-crm-api:latest
+          image: ghcr.io/dotcomrow/suncoast-crm-api:sha-38dee75db665dd3b8e2c10a0227f03d4ea5b89e9
           imagePullPolicy: Always
           command: ["node", "dist/migrate.js"]
           envFrom:
