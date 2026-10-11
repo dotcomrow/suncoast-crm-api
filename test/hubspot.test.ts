@@ -24,3 +24,13 @@ test("HubSpot adapter marks throttling as retryable", async (t) => {
     return error instanceof Error && "retryable" in error && error.retryable === true;
   });
 });
+
+test("HubSpot adapter uses the built-in unique ID for notes", async (t) => {
+  let body: Record<string, unknown> | undefined;
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ results: [{ id: "456", properties: {} }] }), { status: 200, headers: { "content-type": "application/json" } });
+  });
+  await new HubSpotProvider("secret", "https://api.hubapi.test", "suncoast_crm_id").create("activities", { ...entity, type: "activities" });
+  assert.deepEqual(body, { inputs: [{ id: "a", idProperty: "hs_unique_id", objectWriteTraceId: "a", properties: { email: "test@example.com", hs_unique_id: "a" } }] });
+});

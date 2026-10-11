@@ -7,6 +7,7 @@ interface HubSpotBatchResult { results?: HubSpotObject[]; errors?: Array<{ messa
 const objectNames: Record<EntityType, string> = {
   contacts: "contacts", companies: "companies", deals: "deals", activities: "notes"
 };
+const builtInIdempotencyProperties: Partial<Record<EntityType, string>> = { activities: "hs_unique_id" };
 
 export class HubSpotProvider implements CrmProvider {
   readonly name = "hubspot";
@@ -39,13 +40,14 @@ export class HubSpotProvider implements CrmProvider {
 
   async create(type: EntityType, entity: CrmEntity): Promise<ProviderWriteResult> {
     this.ensureSupported(entity);
+    const idempotencyProperty = builtInIdempotencyProperties[type] ?? this.idempotencyProperty;
     const response = await this.request<HubSpotBatchResult>(`/crm/v3/objects/${objectNames[type]}/batch/upsert`, {
       method: "POST",
       body: JSON.stringify({ inputs: [{
         id: entity.id,
-        idProperty: this.idempotencyProperty,
+        idProperty: idempotencyProperty,
         objectWriteTraceId: entity.id,
-        properties: { ...entity.properties, [this.idempotencyProperty]: entity.id }
+        properties: { ...entity.properties, [idempotencyProperty]: entity.id }
       }] })
     });
     const item = response.results?.[0];
@@ -77,7 +79,17 @@ export class HubSpotProvider implements CrmProvider {
 
 export async function ensureHubSpotIdempotencyProperties(token: string, baseUrl: string, propertyName: string): Promise<void> {
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-  for (const objectType of Object.values(objectNames)) {
+  for (const [entityType, objectType] of Object.entries(objectNames) as Array<[EntityType, string]>) {
+    const builtInProperty = builtInIdempotencyProperties[entityType];
+    if (builtInProperty) {
+      const existing = await fetch(`${baseUrl}/crm/v3/properties/${objectType}/${builtInProperty}`, { headers });
+      if (!existing.ok) throw new Error(`Unable to verify HubSpot ${objectType} built-in idempotency property ${builtInProperty}: ${existing.status} ${(await existing.text()).slice(0, 500)}`);
+      const metadata = await existing.json() as { hasUniqueValue?: boolean; modificationMetadata?: { readOnlyValue?: boolean } };
+      if (!metadata.hasUniqueValue || metadata.modificationMetadata?.readOnlyValue) {
+        throw new Error(`HubSpot ${objectType} property ${builtInProperty} is not writable and unique`);
+      }
+      continue;
+    }
     const existing = await fetch(`${baseUrl}/crm/v3/properties/${objectType}/${propertyName}`, { headers });
     if (existing.ok) continue;
     if (existing.status !== 404) throw new Error(`Unable to inspect HubSpot ${objectType} property: ${existing.status} ${(await existing.text()).slice(0, 500)}`);
