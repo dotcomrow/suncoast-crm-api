@@ -18,7 +18,7 @@ applications -> Gravitee -> CRM API -> Yugabyte transaction
 
 Writes return `202 Accepted` and an operation URL. The API commits the operation and outbox message atomically before returning. The outbox publishes to Kafka with all-replica acknowledgement. The worker updates HubSpot, then updates the local Yugabyte projection. Callers can safely retry using the same `Idempotency-Key`.
 
-Kafka gives at-least-once delivery, not exactly-once provider writes. The HubSpot adapter therefore upserts contacts, companies, and deals by the hidden, unique `suncoast_crm_id` property. Activities map to notes and use HubSpot's existing writable, unique `hs_unique_id` property. The setup Job creates only the three required custom properties before the application rolls out, so a retried create resolves to the same HubSpot record.
+Kafka gives at-least-once delivery, not exactly-once provider writes. The HubSpot adapter therefore upserts contacts, companies, and deals by the hidden, unique `suncoast_crm_id` property. Activities map to notes and use HubSpot's existing writable, unique `hs_unique_id` property. The setup Job creates only the three required custom properties in HubSpot's existing standard property groups; it does not create or modify property groups. A retried create therefore resolves to the same HubSpot record.
 
 ## Stable API
 

@@ -8,6 +8,9 @@ const objectNames: Record<EntityType, string> = {
   contacts: "contacts", companies: "companies", deals: "deals", activities: "notes"
 };
 const builtInIdempotencyProperties: Partial<Record<EntityType, string>> = { activities: "hs_unique_id" };
+const standardPropertyGroups: Partial<Record<EntityType, string>> = {
+  contacts: "contactinformation", companies: "companyinformation", deals: "dealinformation"
+};
 
 export class HubSpotProvider implements CrmProvider {
   readonly name = "hubspot";
@@ -94,15 +97,8 @@ export async function ensureHubSpotIdempotencyProperties(token: string, baseUrl:
     if (existing.ok) continue;
     if (existing.status !== 404) throw new Error(`Unable to inspect HubSpot ${objectType} property: ${existing.status} ${(await existing.text()).slice(0, 500)}`);
 
-    const groupName = "suncoast_crm";
-    const group = await fetch(`${baseUrl}/crm/v3/properties/${objectType}/groups`, {
-      method: "POST", headers, body: JSON.stringify({ name: groupName, label: "Suncoast CRM", displayOrder: -1 })
-    });
-    if (!group.ok && group.status !== 409) {
-      const detail = await group.text();
-      if (!detail.toLowerCase().includes("already exists")) throw new Error(`Unable to create HubSpot ${objectType} property group: ${group.status} ${detail.slice(0, 500)}`);
-    }
-
+    const groupName = standardPropertyGroups[entityType];
+    if (!groupName) throw new Error(`No HubSpot property group is configured for ${entityType}`);
     const created = await fetch(`${baseUrl}/crm/v3/properties/${objectType}`, {
       method: "POST", headers, body: JSON.stringify({
         groupName, name: propertyName, label: "Suncoast CRM ID", type: "string", fieldType: "text",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HubSpotProvider } from "../src/providers/hubspot.js";
+import { ensureHubSpotIdempotencyProperties, HubSpotProvider } from "../src/providers/hubspot.js";
 import type { CrmEntity } from "../src/types.js";
 
 const entity: CrmEntity = { id: "a", type: "contacts", provider: "hubspot", providerId: null, properties: { email: "test@example.com" }, associations: {}, version: 1, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() };
@@ -33,4 +33,20 @@ test("HubSpot adapter uses the built-in unique ID for notes", async (t) => {
   });
   await new HubSpotProvider("secret", "https://api.hubapi.test", "suncoast_crm_id").create("activities", { ...entity, type: "activities" });
   assert.deepEqual(body, { inputs: [{ id: "a", idProperty: "hs_unique_id", objectWriteTraceId: "a", properties: { email: "test@example.com", hs_unique_id: "a" } }] });
+});
+
+test("HubSpot setup reuses standard groups and does not create property groups", async (t) => {
+  const requests: Array<{ url: string; method: string; body?: Record<string, unknown> }> = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    const request = { url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined };
+    requests.push(request);
+    if (request.url.endsWith("/notes/hs_unique_id")) {
+      return new Response(JSON.stringify({ hasUniqueValue: true, modificationMetadata: { readOnlyValue: false } }), { status: 200 });
+    }
+    if (request.method === "GET") return new Response("not found", { status: 404 });
+    return new Response(JSON.stringify({}), { status: 201 });
+  });
+  await ensureHubSpotIdempotencyProperties("secret", "https://api.hubapi.test", "suncoast_crm_id");
+  assert.equal(requests.some((request) => request.url.endsWith("/groups")), false);
+  assert.deepEqual(requests.filter((request) => request.method === "POST").map((request) => request.body?.groupName), ["contactinformation", "companyinformation", "dealinformation"]);
 });
