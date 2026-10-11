@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: suncoast-crm-hubspot-setup
+  namespace: crm
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: suncoast-crm-hubspot-setup }
+      annotations: { linkerd.io/inject: "disabled" }
+    spec:
+      restartPolicy: OnFailure
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: setup
+          image: ghcr.io/dotcomrow/suncoast-crm-api:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/hubspot-setup.js"]
+          envFrom:
+            - configMapRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-database }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }

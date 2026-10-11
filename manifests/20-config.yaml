@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suncoast-crm-api
+  namespace: crm
+data:
+  PORT: "8080"
+  DATABASE_SSL: "false"
+  CRM_TENANT_ID: "suncoast"
+  CRM_PROVIDER: "hubspot"
+  HUBSPOT_BASE_URL: "https://api.hubapi.com"
+  HUBSPOT_IDEMPOTENCY_PROPERTY: "suncoast_crm_id"
+  KAFKA_BROKERS: "kafka.kafka.svc.internal.lan:9092"
+  KAFKA_CLIENT_ID: "suncoast-crm-api"
+  KAFKA_CONSUMER_GROUP: "suncoast-crm-provider-workers-v1"
+  KAFKA_COMMAND_TOPIC: "crm.commands.v1"
+  KAFKA_EVENT_TOPIC: "crm.events.v1"
+  KAFKA_DLQ_TOPIC: "crm.commands.dlq.v1"
+  KAFKA_SECURITY_PROTOCOL: "SASL_PLAINTEXT"
+  KAFKA_SASL_MECHANISM: "scram-sha-256"
+  OLLAMA_ENABLED: "true"
+  OLLAMA_BASE_URL: "http://ollama.ollama.svc.cluster.local:11434"
+  OLLAMA_MODEL: "qwen3:14b"
+  OPENAPI_SERVER_URL: "/crm"
+  PROVIDER_MAX_ATTEMPTS: "8"
+  PROCESSING_LEASE_SECONDS: "300"
+  WORKER_HEALTH_PORT: "8081"

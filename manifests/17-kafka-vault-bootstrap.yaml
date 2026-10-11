@@ -1,0 +1,100 @@
+# Prepare the durable Vault inputs consumed by the platform Kafka security
+# reconciler. Existing username/password values are preserved across syncs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: suncoast-crm-kafka-vault-bootstrap
+  namespace: vault
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: suncoast-crm-kafka-vault-bootstrap
+      annotations:
+        linkerd.io/inject: "disabled"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      volumes:
+        - name: vault-root-token
+          secret:
+            secretName: vault-root-token
+      containers:
+        - name: configure
+          image: hashicorp/vault:1.15.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              export VAULT_ADDR="http://vault.vault.svc.cluster.local:8200"
+              if [ -f /vault-token/VAULT_TOKEN ]; then
+                VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
+              elif [ -f /vault-token/token ]; then
+                VAULT_TOKEN="$(cat /vault-token/token)"
+              else
+                echo "Vault root-token file is unavailable" >&2
+                exit 1
+              fi
+              export VAULT_TOKEN
+
+              ensure_value() {
+                path="$1"
+                desired="$2"
+                if current="$(vault kv get -field=value "$path" 2>/dev/null)" && [ -n "$current" ]; then
+                  echo "Preserving existing Vault value at ${path}"
+                else
+                  vault kv put "$path" value="$desired" >/dev/null
+                  echo "Created Vault value at ${path}"
+                fi
+              }
+
+              ensure_generated_value() {
+                path="$1"
+                if current="$(vault kv get -field=value "$path" 2>/dev/null)" && [ -n "$current" ]; then
+                  echo "Preserving existing Vault value at ${path}"
+                else
+                  generated="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
+                  vault kv put "$path" value="$generated" >/dev/null
+                  echo "Generated durable Vault value at ${path}"
+                fi
+              }
+
+              BASE="secret/kafka-scram-user-suncoast-crm-api"
+              ensure_value "$BASE" "suncoast-crm-api"
+              ensure_generated_value "${BASE}-password"
+              ensure_value "${BASE}-topic-all" "crm.commands.v1,crm.events.v1,crm.commands.dlq.v1"
+              ensure_value "${BASE}-group-read" "suncoast-crm-provider-workers-v1"
+              ensure_value "${BASE}-group-describe" "suncoast-crm-provider-workers-v1"
+              ensure_value "${BASE}-cluster-describe" "true"
+
+              vault policy write suncoast-crm-api - <<'EOF'
+              path "secret/data/suncoast-crm-api" {
+                capabilities = ["read"]
+              }
+              path "secret/data/kafka-scram-user-suncoast-crm-api" {
+                capabilities = ["read"]
+              }
+              path "secret/data/kafka-scram-user-suncoast-crm-api-password" {
+                capabilities = ["read"]
+              }
+              EOF
+
+              vault write auth/kubernetes/role/suncoast-crm-api \
+                bound_service_account_names="crm-external-secrets" \
+                bound_service_account_namespaces="crm" \
+                policies="suncoast-crm-api" \
+                ttl="1h" >/dev/null
+
+              echo "CRM Kafka Vault bootstrap complete"
+          volumeMounts:
+            - name: vault-root-token
+              mountPath: /vault-token
+              readOnly: true
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 96Mi }

@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: suncoast-crm-api
+  namespace: crm
+  labels: { app: suncoast-crm-api }
+  annotations:
+    gravitee.io/expose: "true"
+    gravitee.io/context-path: "/crm"
+    gravitee.io/auth-required: "keycloak-oauth2"
+    gravitee.io/approval-required: "admin"
+    gravitee.io/description: "Provider-neutral CRM API"
+    gravitee.io/version: "v1"
+    gravitee.io/tags: "crm,hubspot,kafka,ai"
+    gravitee.io/definition-name: "suncoast-crm-api"
+    gravitee.io/definition-summary: "Suncoast CRM API"
+    gravitee.io/definition-description: "Stable asynchronous CRM contract backed by pluggable providers."
+    gravitee.io/definition-type: "HTTP"
+    gravitee.io/definition-visibility: "PUBLIC"
+    gravitee.io/definition-state: "STARTED"
+    gravitee.io/definition-lifecycle-state: "PUBLISHED"
+    gravitee.io/definition-openapi-url: "http://suncoast-crm-api.crm.svc.cluster.local:8080/openapi.json"
+    gravitee.io/definition-context-path: "/crm"
+    gravitee.io/definition-version: "v1"
+    gravitee.io/definition-listener-host: "suncoast-crm-api.crm.svc.cluster.local"
+    gravitee.io/definition-listener-port: "8080"
+    gravitee.io/definition-groups: "platform"
+    gravitee.io/definition-tags: "crm,hubspot,kafka,ai"
+    gravitee.io/definition-labels: "internal,platform,crm"
+    gravitee.io/definition-categories: "platform"
+    gravitee.io/definition-path-mappings: "/crm/*"
+    gravitee.io/definition-metadata: '{"owner":"platform","service":"suncoast-crm-api"}'
+    gravitee.io/definition-properties: '{"tier":"prod"}'
+    gravitee.io/definition-endpoint-groups: '[{"name":"default","type":"http-proxy","sharedConfiguration":{"http":{"version":"HTTP_1_1","connectTimeout":5000,"readTimeout":30000,"idleTimeout":30000,"keepAlive":true,"keepAliveTimeout":30000,"pipelining":false,"useCompression":false,"propagateClientAcceptEncoding":false,"followRedirects":false,"maxConcurrentConnections":20}},"services":{"healthCheck":{"enabled":true,"overrideConfiguration":true,"type":"http-health-check","configuration":{"schedule":"*/30 * * * * *","target":"/healthz","method":"GET","overrideEndpointPath":true,"headers":[],"assertion":"{#response.status == 200}","successThreshold":2,"failureThreshold":2}}},"endpoints":[{"name":"crm-http","type":"http-proxy","inheritConfiguration":true,"weight":1,"configuration":{"target":"http://suncoast-crm-api.crm.svc.cluster.local:8080"},"secondary":false}]}]'
+    gravitee.io/definition-pages: '{"swagger":{"type":"SWAGGER","name":"openapi","published":true,"visibility":"PUBLIC","homepage":false,"source":{"type":"http-fetcher","configuration":{"url":"http://suncoast-crm-api.crm.svc.cluster.local:8080/openapi.json","autoFetch":true,"fetchCron":"0 */5 * * * *","useSystemProxy":false}}}}'
+    gravitee.io/definition-resources: '[]'
+    gravitee.io/definition-plans: '{"keycloak-oauth2":{"name":"Keycloak OAuth2","description":"Authenticated platform access","security":{"type":"KEY_LESS"},"status":"PUBLISHED","validation":"AUTO","type":"API","selectionRule":"true"}}'
+    gravitee.io/definition-flows: '[]'
+    gravitee.io/definition-response-templates: '{}'
+    gravitee.io/definition-analytics: '{"enabled":true,"logging":{"condition":"true","content":{"headers":true,"payload":false},"mode":{"entrypoint":true,"endpoint":true},"phase":{"request":true,"response":true}}}'
+    gravitee.io/definition-entrypoints: '[]'
+spec:
+  selector: { app: suncoast-crm-api, component: api }
+  ports: [{ name: http, port: 8080, targetPort: http }]

@@ -1,0 +1,15 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: suncoast-crm-api
+  namespace: crm
+spec:
+  podSelector: { matchLabels: { app: suncoast-crm-api } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: k8s-api-gateway } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: crm } }
+      ports: [{ protocol: TCP, port: 8080 }]

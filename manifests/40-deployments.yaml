@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: suncoast-crm-api
+  namespace: crm
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suncoast-crm-api
+  namespace: crm
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: suncoast-crm-api, component: api } }
+  template:
+    metadata:
+      labels: { app: suncoast-crm-api, component: api }
+      annotations: { linkerd.io/inject: "enabled" }
+    spec:
+      serviceAccountName: suncoast-crm-api
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: api
+          image: ghcr.io/dotcomrow/suncoast-crm-api:latest
+          imagePullPolicy: Always
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-database }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          startupProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 20, timeoutSeconds: 3 }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suncoast-crm-worker
+  namespace: crm
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: suncoast-crm-api, component: worker } }
+  template:
+    metadata:
+      labels: { app: suncoast-crm-api, component: worker }
+      annotations: { linkerd.io/inject: "enabled" }
+    spec:
+      serviceAccountName: suncoast-crm-api
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: ghcr.io/dotcomrow/suncoast-crm-api:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/worker.js"]
+          ports: [{ name: health, containerPort: 8081 }]
+          envFrom:
+            - configMapRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-database }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          startupProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 5, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /readyz, port: health }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 20, timeoutSeconds: 3 }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: suncoast-crm-api
+  namespace: crm
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: suncoast-crm-api, component: api } }
