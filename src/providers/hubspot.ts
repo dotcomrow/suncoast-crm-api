@@ -8,6 +8,9 @@ const objectNames: Record<EntityType, string> = {
   contacts: "contacts", companies: "companies", deals: "deals", activities: "notes"
 };
 const builtInIdempotencyProperties: Partial<Record<EntityType, string>> = { activities: "hs_unique_id" };
+const standardPropertyGroups: Partial<Record<EntityType, string>> = {
+  contacts: "contactinformation", companies: "companyinformation", deals: "dealinformation"
+};
 
 export class HubSpotProvider implements CrmProvider {
   readonly name = "hubspot";
@@ -92,7 +95,18 @@ export async function ensureHubSpotIdempotencyProperties(token: string, baseUrl:
     }
     const existing = await fetch(`${baseUrl}/crm/v3/properties/${objectType}/${propertyName}`, { headers });
     if (existing.status === 404) {
-      throw new Error(`HubSpot ${objectType} is missing required unique text property '${propertyName}'. Create it manually in HubSpot before deploying.`);
+      const groupName = standardPropertyGroups[entityType];
+      if (!groupName) throw new Error(`No HubSpot property group is configured for ${entityType}`);
+      const created = await fetch(`${baseUrl}/crm/v3/properties/${objectType}`, {
+        method: "POST", headers, body: JSON.stringify({
+          groupName, name: propertyName, label: "Suncoast CRM ID", description: "Stable identifier used by the Suncoast CRM API for idempotent synchronization.",
+          type: "string", fieldType: "text", hasUniqueValue: true, hidden: true, formField: false
+        })
+      });
+      if (!created.ok && created.status !== 409) {
+        throw new Error(`Unable to create HubSpot ${objectType} idempotency property: ${created.status} ${(await created.text()).slice(0, 1000)}`);
+      }
+      continue;
     }
     if (!existing.ok) throw new Error(`Unable to inspect HubSpot ${objectType} property: ${existing.status} ${(await existing.text()).slice(0, 500)}`);
     const metadata = await existing.json() as { type?: string; hasUniqueValue?: boolean; modificationMetadata?: { readOnlyValue?: boolean } };
