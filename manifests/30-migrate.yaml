@@ -16,6 +16,7 @@ spec:
       annotations: { linkerd.io/inject: "disabled" }
     spec:
       restartPolicy: OnFailure
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: migrate
           image: ghcr.io/dotcomrow/suncoast-crm-api:latest
@@ -24,3 +25,4 @@ spec:
           envFrom:
             - configMapRef: { name: suncoast-crm-api }
             - secretRef: { name: suncoast-crm-database }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }

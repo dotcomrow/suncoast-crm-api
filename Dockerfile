@@ -13,6 +13,6 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
-USER node
+USER 1000:1000
 EXPOSE 8080 8081
 CMD ["node", "dist/api.js"]

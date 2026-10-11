@@ -16,7 +16,7 @@ spec:
       annotations: { linkerd.io/inject: "disabled" }
     spec:
       restartPolicy: OnFailure
-      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: setup
           image: ghcr.io/dotcomrow/suncoast-crm-api:latest

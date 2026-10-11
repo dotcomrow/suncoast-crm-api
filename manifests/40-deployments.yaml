@@ -21,7 +21,7 @@ spec:
       annotations: { linkerd.io/inject: "enabled" }
     spec:
       serviceAccountName: suncoast-crm-api
-      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: api
           image: ghcr.io/dotcomrow/suncoast-crm-api:latest
@@ -53,7 +53,7 @@ spec:
       annotations: { linkerd.io/inject: "enabled" }
     spec:
       serviceAccountName: suncoast-crm-api
-      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: worker
           image: ghcr.io/dotcomrow/suncoast-crm-api:latest
