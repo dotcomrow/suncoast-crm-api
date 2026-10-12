@@ -224,20 +224,30 @@ async function shutdown(): Promise<void> {
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void shutdown());
 
 await recoverExpiredClaims();
-await consumer.connect();
-await consumer.subscribe({ topics: commandTopics(), fromBeginning: false });
-kafkaReady = true;
 void runNotificationOutbox(() => shuttingDown);
-await consumer.run({
-  eachMessage: async ({ message }) => {
-    if (!message.value) return;
-    const raw = message.value.toString();
-    const parsedJson = (() => { try { return JSON.parse(raw) as unknown; } catch { return null; } })();
-    const parsed = commandSchema.safeParse(parsedJson);
-    if (!parsed.success) {
-      await (await producer()).send({ topic: config().KAFKA_DLQ_TOPIC, messages: [{ key: "malformed", value: JSON.stringify({ type: "crm.command.rejected", failure: parsed.error.message, payload: raw, failedAt: new Date().toISOString() }) }] });
-      return;
-    }
-    await processCommand(parsed.data);
+while (!shuttingDown) {
+  try {
+    await consumer.connect();
+    await consumer.subscribe({ topics: commandTopics(), fromBeginning: false });
+    kafkaReady = true;
+    await consumer.run({
+      eachMessage: async ({ message }) => {
+        if (!message.value) return;
+        const raw = message.value.toString();
+        const parsedJson = (() => { try { return JSON.parse(raw) as unknown; } catch { return null; } })();
+        const parsed = commandSchema.safeParse(parsedJson);
+        if (!parsed.success) {
+          await (await producer()).send({ topic: config().KAFKA_DLQ_TOPIC, messages: [{ key: "malformed", value: JSON.stringify({ type: "crm.command.rejected", failure: parsed.error.message, payload: raw, failedAt: new Date().toISOString() }) }] });
+          return;
+        }
+        await processCommand(parsed.data);
+      }
+    });
+  } catch (error) {
+    kafkaReady = false;
+    if (shuttingDown) break;
+    console.error("Kafka worker connection failed; retrying in 5 seconds", error);
+    await consumer.disconnect().catch(() => undefined);
+    await delay(5000);
   }
-});
+}
