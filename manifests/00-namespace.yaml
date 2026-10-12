@@ -5,6 +5,7 @@ metadata:
   labels:
     app: crm
     app.kubernetes.io/part-of: suncoast-crm
+    platform.suncoast.systems/autosize: enabled
   annotations:
     linkerd.io/inject: enabled
     field.cattle.io/projectId: local:applications
