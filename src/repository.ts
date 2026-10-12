@@ -6,11 +6,11 @@ import { inTransaction, pool } from "./db.js";
 import type { CommandAction, CrmCommand, EntityType } from "./types.js";
 
 export interface QueueInput {
-  tenantId: string; provider: string; action: CommandAction; entityType?: EntityType; entityId?: string;
+  tenantId: string; provider: string; action: CommandAction; entityType?: string; entityId?: string;
   payload: Record<string, unknown>; idempotencyKey: string; correlationId: string;
 }
 
-interface OperationIdentity { id: string; status: string; entity_id: string | null; action: CommandAction; entity_type: EntityType | null; request: Record<string, unknown> }
+interface OperationIdentity { id: string; status: string; entity_id: string | null; action: CommandAction; entity_type: string | null; request: Record<string, unknown> }
 
 export async function queueOperation(input: QueueInput): Promise<{ id: string; status: string; entityId?: string; duplicate: boolean }> {
   return inTransaction(async (client) => {

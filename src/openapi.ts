@@ -14,7 +14,7 @@ const queued = { type: "object", required: ["operation_id", "status"], propertie
   entity_id: { type: "string", format: "uuid" }, status_url: { type: "string" }
 } };
 const operation = { type: "object", required: ["id", "provider", "action", "status", "attempts", "created_at"], properties: {
-  id: { type: "string", format: "uuid" }, provider: { type: "string" }, action: { type: "string", enum: ["create", "update", "delete", "ai.summarize"] },
+  id: { type: "string", format: "uuid" }, provider: { type: "string" }, action: { type: "string", enum: ["create", "update", "delete", "ai.summarize", "custom.create", "custom.update", "custom.delete", "form.submit"] },
   entity_type: { type: "string", nullable: true }, entity_id: { type: "string", format: "uuid", nullable: true }, status: { type: "string", enum: ["queued", "processing", "retrying", "succeeded", "failed"] },
   result: { type: "object", nullable: true, additionalProperties: true }, error: { type: "string", nullable: true }, attempts: { type: "integer" }, correlation_id: { type: "string" },
   created_at: { type: "string", format: "date-time" }, started_at: { type: "string", format: "date-time", nullable: true }, finished_at: { type: "string", format: "date-time", nullable: true }
@@ -24,12 +24,55 @@ const idempotency = { name: "Idempotency-Key", in: "header", required: true, sch
 const entityType = { name: "entityType", in: "path", required: true, schema: { type: "string", enum: ["contacts", "companies", "deals", "activities"] } };
 const entityId = { name: "entityId", in: "path", required: true, schema: { type: "string", format: "uuid" } };
 const accepted = { description: "Durably queued", content: { "application/json": { schema: { $ref: "#/components/schemas/QueuedOperation" } } } };
+const objectName = { name: "objectName", in: "path", required: true, schema: { type: "string", pattern: "^[a-z][a-z0-9_]{0,62}$" } };
+const recordId = { name: "recordId", in: "path", required: true, schema: { type: "string", format: "uuid" } };
+const formName = { name: "formName", in: "path", required: true, schema: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,62}$" } };
+const formSubmissionWrite = {
+  type: "object", required: ["fields"], properties: {
+    fields: { type: "object", minProperties: 1, additionalProperties: { oneOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] } },
+    context: { type: "object", properties: { page_uri: { type: "string", format: "uri" }, page_name: { type: "string" }, hutk: { type: "string" } } },
+    consent: { type: "object", required: ["consent_to_process", "text", "communications"], properties: {
+      consent_to_process: { type: "boolean", enum: [true] }, text: { type: "string" },
+      communications: { type: "array", minItems: 1, items: { type: "object", required: ["value", "subscription_type_id", "text"], properties: { value: { type: "boolean", enum: [true] }, subscription_type_id: { type: "integer", minimum: 1 }, text: { type: "string" } } } }
+    } }
+  }
+};
+const formSubmission = {
+  type: "object", required: ["id", "provider", "form_name", "fields", "status", "created_at", "updated_at"], properties: {
+    id: { type: "string", format: "uuid" }, provider: { type: "string" }, form_name: { type: "string" }, provider_form_id: { type: "string" },
+    email: { type: "string", format: "email", nullable: true }, fields: { type: "object", additionalProperties: true }, context: { type: "object", additionalProperties: true },
+    consent: { type: "object", nullable: true, additionalProperties: true }, status: { type: "string", enum: ["queued", "retrying", "submitted", "failed"] },
+    provider_response: { type: "object", nullable: true, additionalProperties: true }, error: { type: "string", nullable: true }, submitted_at: { type: "string", format: "date-time", nullable: true },
+    created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" }
+  }
+};
 
 export function openApiSpec() {
   return {
     openapi: "3.0.3", info: { title: "Suncoast CRM API", version: "1.0.0", description: "Stable provider-neutral CRM contract. Writes are durable asynchronous operations." },
-    servers: [{ url: config().OPENAPI_SERVER_URL }], security: [{ bearerAuth: [] }], tags: [{ name: "CRM" }, { name: "Operations" }, { name: "AI" }],
+    servers: [{ url: config().OPENAPI_SERVER_URL }], security: [{ bearerAuth: [] }], tags: [{ name: "CRM" }, { name: "Forms" }, { name: "Custom Objects" }, { name: "Operations" }, { name: "AI" }],
     paths: {
+      "/v1/forms/{formName}/submissions": {
+        post: { tags: ["Forms"], operationId: "submitCrmForm", description: "Durably queues a configured provider form submission. HubSpot forms can trigger double opt-in when enabled in HubSpot.", parameters: [idempotency, formName], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/FormSubmissionWrite" } } } }, responses: { "202": accepted, "404": { $ref: "#/components/responses/Error" } } }
+      },
+      "/v1/form-submissions/{submissionId}": {
+        get: { tags: ["Forms"], operationId: "getCrmFormSubmission", parameters: [{ name: "submissionId", in: "path", required: true, schema: { type: "string", format: "uuid" } }], responses: { "200": { description: "Durable local submission state", content: { "application/json": { schema: { $ref: "#/components/schemas/FormSubmission" } } } }, "404": { $ref: "#/components/responses/Error" } } }
+      },
+      "/v1/custom-objects": {
+        get: { tags: ["Custom Objects"], operationId: "listCustomObjects", description: "Read-only definitions managed by deployment migrations.", responses: { "200": { description: "Registered custom object definitions" } } }
+      },
+      "/v1/custom-objects/{objectName}": {
+        get: { tags: ["Custom Objects"], operationId: "getCustomObject", parameters: [objectName], responses: { "200": { description: "Custom object definition", content: { "application/json": { schema: { $ref: "#/components/schemas/CustomObjectDefinition" } } } }, "404": { $ref: "#/components/responses/Error" } } }
+      },
+      "/v1/custom-objects/{objectName}/records": {
+        get: { tags: ["Custom Objects"], operationId: "listCustomObjectRecords", parameters: [objectName, { name: "contact_id", in: "query", schema: { type: "string", format: "uuid" } }, { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } }, { name: "cursor", in: "query", schema: { type: "string" } }], responses: { "200": { description: "Custom record page" } } },
+        post: { tags: ["Custom Objects"], operationId: "createCustomObjectRecord", parameters: [idempotency, objectName], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CustomObjectRecordWrite" } } } }, responses: { "202": accepted } }
+      },
+      "/v1/custom-objects/{objectName}/records/{recordId}": {
+        get: { tags: ["Custom Objects"], operationId: "getCustomObjectRecord", parameters: [objectName, recordId], responses: { "200": { description: "Custom record", content: { "application/json": { schema: { $ref: "#/components/schemas/CustomObjectRecord" } } } }, "404": { $ref: "#/components/responses/Error" } } },
+        patch: { tags: ["Custom Objects"], operationId: "updateCustomObjectRecord", parameters: [idempotency, objectName, recordId], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["properties"], properties: { properties: { type: "object", additionalProperties: true } } } } } }, responses: { "202": accepted } },
+        delete: { tags: ["Custom Objects"], operationId: "deleteCustomObjectRecord", parameters: [idempotency, objectName, recordId], responses: { "202": accepted } }
+      },
       "/v1/{entityType}": {
         get: { tags: ["CRM"], operationId: "listCrmEntities", parameters: [entityType, { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } }, { name: "cursor", in: "query", schema: { type: "string" } }], responses: { "200": { description: "Entity page", content: { "application/json": { schema: { $ref: "#/components/schemas/EntityPage" } } } } } },
         post: { tags: ["CRM"], operationId: "createCrmEntity", parameters: [idempotency, entityType], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/EntityWrite" } } } }, responses: { "202": accepted, "400": { $ref: "#/components/responses/Error" } } }
@@ -55,6 +98,18 @@ export function openApiSpec() {
       "/healthz": { get: { security: [], operationId: "health", responses: { "200": { description: "Process health" } } } },
       "/readyz": { get: { security: [], operationId: "readiness", responses: { "200": { description: "Database ready" }, "503": { description: "Not ready" } } } }
     },
-    components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } }, schemas: { CrmEntity: entity, Operation: operation, EntityPage: { type: "object", required: ["items"], properties: { items: { type: "array", items: { $ref: "#/components/schemas/CrmEntity" } }, nextCursor: { type: "string" } } }, EntityWrite: { type: "object", properties: { properties: { type: "object", additionalProperties: true }, associations: { type: "object", additionalProperties: { type: "array", items: { type: "string" } } } } }, QueuedOperation: queued, Error: error }, responses: { Error: { description: "Error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } } } }
+    components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } }, schemas: { CrmEntity: entity, Operation: operation, EntityPage: { type: "object", required: ["items"], properties: { items: { type: "array", items: { $ref: "#/components/schemas/CrmEntity" } }, nextCursor: { type: "string" } } }, EntityWrite: { type: "object", properties: { properties: { type: "object", additionalProperties: true }, associations: { type: "object", additionalProperties: { type: "array", items: { type: "string" } } } } },
+      CustomObjectField: { type: "object", required: ["name", "label", "type"], properties: { name: { type: "string", pattern: "^[a-z][a-z0-9_]{0,62}$" }, label: { type: "string" }, type: { type: "string", enum: ["string", "number", "boolean", "date", "datetime", "enumeration"] }, required: { type: "boolean", default: false }, unique: { type: "boolean", default: false }, options: { type: "array", items: { type: "object", required: ["label", "value"], properties: { label: { type: "string" }, value: { type: "string" } } } } } },
+      CustomObjectDefinitionWrite: { type: "object", required: ["name", "singular_label", "plural_label", "primary_display_property", "fields"], properties: { name: { type: "string", pattern: "^[a-z][a-z0-9_]{0,62}$" }, singular_label: { type: "string" }, plural_label: { type: "string" }, primary_display_property: { type: "string" }, fields: { type: "array", minItems: 1, items: { $ref: "#/components/schemas/CustomObjectField" } }, storage_mode: { type: "string", enum: ["local", "contact_properties", "provider_custom_object"], default: "local" }, cardinality: { type: "string", enum: ["one_per_contact", "many_per_contact"], default: "many_per_contact" } } },
+      CustomObjectDefinition: { allOf: [{ $ref: "#/components/schemas/CustomObjectDefinitionWrite" }, { type: "object", required: ["id", "provider", "provider_object_type"], properties: { id: { type: "string", format: "uuid" }, provider: { type: "string" }, provider_object_type: { type: "string" }, duplicate: { type: "boolean" }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" } } }] },
+      CustomObjectRecordWrite: { type: "object", required: ["contact_id", "properties"], properties: { contact_id: { type: "string", format: "uuid" }, properties: { type: "object", additionalProperties: true } } },
+      CustomObjectRecord: { type: "object", required: ["id", "object_name", "contact_id", "properties", "version"], properties: { id: { type: "string", format: "uuid" }, object_name: { type: "string" }, contact_id: { type: "string", format: "uuid" }, provider_id: { type: "string", nullable: true }, properties: { type: "object", additionalProperties: true }, version: { type: "integer" }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" } } },
+      FormSubmissionWrite: formSubmissionWrite,
+      FormSubmission: formSubmission,
+      QueuedOperation: queued,
+      Error: error
+    }, responses: {
+      Error: { description: "Error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } }
+    } }
   };
 }

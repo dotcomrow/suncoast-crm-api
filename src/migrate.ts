@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { pool } from "./db.js";
+import { reconcileDefinitionMigrations } from "./definition-migrations.js";
 
 const migrationsDirectory = fileURLToPath(new URL("../migrations/", import.meta.url));
 const migrationNames = (await readdir(migrationsDirectory)).filter((name) => name.endsWith(".sql")).sort();
@@ -36,5 +37,6 @@ for (const name of migrationNames) {
   }
 }
 
-console.log("CRM database migrations complete");
+await reconcileDefinitionMigrations();
+console.log("CRM database and custom-object definition migrations complete");
 await pool.end();

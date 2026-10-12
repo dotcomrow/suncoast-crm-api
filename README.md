@@ -11,12 +11,55 @@ applications -> Gravitee -> CRM API -> Yugabyte transaction
                                                                       |
                                                                CRM worker
                                                                |-- HubSpot adapter
+                                                               |-- delayed Kafka retries
+                                                               |-- terminal failure email
                                                                `-- Ollama (opt-in jobs)
                                                                       |
                                      Yugabyte projection + crm.events.v1 / DLQ
 ```
 
-Writes return `202 Accepted` and an operation URL. The API commits the operation and outbox message atomically before returning. The outbox publishes to Kafka with all-replica acknowledgement. The worker updates HubSpot, then updates the local Yugabyte projection. Callers can safely retry using the same `Idempotency-Key`.
+Writes return `202 Accepted` and an operation URL. The API commits the operation and outbox message atomically before returning. The outbox publishes to Kafka with all-replica acknowledgement. The worker updates HubSpot, then updates the local Yugabyte projection. Callers can safely retry using the same `Idempotency-Key`. Retryable failures use delays of 1 minute, 5 minutes, 30 minutes, 2 hours, 6 hours, and 24 hours; later retries remain at 24 hours. The default 30 attempts keep trying for roughly 24 days. The first HubSpot failure generates one warning email, while a terminal failure is sent to the DLQ and generates a separate error email. Both emails use a durable notification outbox that retries until the platform notification API accepts delivery. The recipient is configured with `HUBSPOT_FAILURE_NOTIFICATION_EMAIL` and defaults to `administrator@suncoast.systems`.
+
+## Provider forms and double opt-in
+
+Configured forms use the same durable operation, Yugabyte outbox, Kafka retry, DLQ, and administrator-notification path as CRM writes:
+
+- `POST /v1/forms/{formName}/submissions` records the complete submission locally before returning `202`.
+- `GET /v1/form-submissions/{submissionId}` returns the durable `queued`, `retrying`, `submitted`, or `failed` state.
+- The HubSpot adapter calls the authenticated Forms API. When double opt-in is enabled for the selected HubSpot form/account, HubSpot sends its confirmation email.
+- The local form-submission record is the immutable signup/consent event even while the person is unconfirmed. HubSpot remains authoritative for double-opt-in confirmation and marketing-subscription eligibility.
+
+Set `HUBSPOT_PORTAL_ID` and `HUBSPOT_FORM_IDS` in `manifests/20-config.yaml` after creating the forms. `HUBSPOT_FORM_IDS` is a JSON map, allowing new purposes without new code, for example:
+
+```yaml
+HUBSPOT_PORTAL_ID: "12345678"
+HUBSPOT_FORM_IDS: '{"newsletter":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","product-interest":"ffffffff-1111-2222-3333-444444444444","beta-signup":"55555555-6666-7777-8888-999999999999"}'
+```
+
+The submitted `fields` names must match fields on the selected HubSpot form. If HubSpot privacy/consent collection is enabled, submit the user-visible consent text and subscription type through the optional `consent` object; the API only accepts affirmative consent values. Do not treat a successful Forms API submission as double-opt-in confirmation: `submitted` means HubSpot accepted the form and the contact may still be awaiting the confirmation click.
+
+## Custom objects
+
+Custom-object schemas are Git-managed deployment assets under `definitions/`; there is no runtime HTTP endpoint that can create or alter them. The single database migration Job validates and reconciles those files after applying SQL migrations, before the API and worker deploy. It records each object name, integer version, filename, and SHA-256 checksum in `crm_custom_object_definition_migrations`. An edited applied file, a skipped version, or an incompatible field definition fails the deployment.
+
+Version 1 is a complete `CustomObjectDefinition` file. Later versions are immutable `CustomObjectMigration` files that may add fields. Destructive rename, removal, and type mutation are intentionally unavailable. Every definition selects one storage mode while retaining the same record API facade:
+
+- `local` (default): Yugabyte is authoritative and no provider custom-object entitlement is required. This supports multiple records per contact.
+- `contact_properties`: Yugabyte is authoritative and fields are projected into namespaced, hidden HubSpot contact properties. This requires `one_per_contact` cardinality.
+- `provider_custom_object`: HubSpot receives a native custom-object schema and records. This is reserved for subscriptions that include HubSpot custom objects.
+
+Provider-native custom objects receive reserved `suncoast_crm_id` and `suncoast_contact_id` properties. Contact-property projections use deterministic names beginning with `suncoast_`; those properties are not merged into the ordinary contact representation returned by this API.
+
+All definitions share one stable record API:
+
+- `GET|POST /v1/custom-objects/{objectName}/records`
+- `GET|PATCH|DELETE /v1/custom-objects/{objectName}/records/{recordId}`
+
+Every record requires `contact_id`. The service verifies that it identifies a live canonical CRM contact, enforces the registered field types, writes through the durable operation/Kafka pipeline, and maintains the Yugabyte projection. Applications never receive database credentials and do not need new service code when another definition is registered.
+
+To add a logical table, add `definitions/<object-name>/001-initial.json`. To evolve it, add the next contiguous file such as `002-add-source.json`; never edit an applied file. The directory intentionally contains no application definitions until a component needs durable state beyond the canonical CRM entities and form-submission ledger. The read-only `GET /v1/custom-objects` and `GET /v1/custom-objects/{objectName}` endpoints expose active contracts, but schema management is only available to the deployment Job through packaged files.
+
+The `local` mode requires no additional HubSpot scope. `contact_properties` requires the existing contact read/write and `crm.schemas.contacts.write` scopes. Native `provider_custom_object` mode requires an account edition that includes custom objects plus `crm.schemas.custom.read`, `crm.schemas.custom.write`, `crm.objects.custom.read`, and `crm.objects.custom.write`.
 
 Kafka gives at-least-once delivery, not exactly-once provider writes. The HubSpot adapter therefore upserts contacts, companies, and deals by the unique `suncoast_crm_id` property. Activities map to notes and use HubSpot's existing writable, unique `hs_unique_id` property. The setup Job creates missing properties in HubSpot's existing standard groups and validates existing properties; it never creates property groups or modifies the notes schema. A retried create therefore resolves to the same HubSpot record.
 
@@ -64,10 +107,11 @@ npm start
 Run the worker separately with `npm run worker`. Kafka auto-topic creation is deliberately disabled; the Kubernetes bootstrap described below creates these topics:
 
 - `crm.commands.v1` — durable work requests
+- `crm.commands.retry.{1m|5m|30m|2h|6h|24h}.v1` — delayed retry stages
 - `crm.events.v1` — completion events
 - `crm.commands.dlq.v1` — terminal failures
 
-The Kubernetes setup grants the CRM principal full access to these three topics and read/describe access to consumer group `suncoast-crm-provider-workers-v1`.
+The Kubernetes setup grants the CRM principal full access to all command, retry, event, and DLQ topics and read/describe access to consumer group `suncoast-crm-provider-workers-v1`. Kafka has no native scheduled delivery, so the transactional Yugabyte outbox holds each retry until its due time, publishes it to the matching retry topic, and the worker consumes every retry topic with the same consumer group.
 
 ## Persistent secrets in Vault
 
@@ -87,9 +131,12 @@ secret/kafka-scram-user-suncoast-crm-api-topic-all         value = CRM topic CSV
 secret/kafka-scram-user-suncoast-crm-api-group-read        value = consumer group
 secret/kafka-scram-user-suncoast-crm-api-group-describe    value = consumer group
 secret/kafka-scram-user-suncoast-crm-api-cluster-describe  value = true
+secret/platform-notification-service/clients/suncoast-crm-api  token = generated token
 ```
 
-`manifests/17-kafka-vault-bootstrap.yaml` creates missing Kafka values, preserves existing ones, and configures Vault policy/auth role `suncoast-crm-api`. `manifests/10-secrets.yaml` maps the HubSpot and Kafka `value` fields into the application Secret. The bootstrap never changes the manually supplied HubSpot Service Key.
+`manifests/17-kafka-vault-bootstrap.yaml` creates missing Kafka values, preserves credentials, reconciles the Kafka topic declaration, creates the durable notification client token if absent, and configures Vault policy/auth role `suncoast-crm-api`. `manifests/10-secrets.yaml` maps the HubSpot, Kafka, and notification credentials into the application Secret. The bootstrap never changes the manually supplied HubSpot Service Key. The notification service must include `suncoast-crm-api` in `NOTIFICATION_INTAKE_TRUSTED_CLIENT_KEYS`.
+
+HubSpot warning and terminal-failure emails use the published Directus templates `crm.hubspot.operation.retrying` and `crm.hubspot.operation.failed`. The notification service publishes rendered requests to the platform-standard `platform.notifications.requested.v1` topic; the existing NiFi notification flow consumes that shared topic and routes the email delivery.
 
 ## Kafka bootstrap
 
@@ -98,9 +145,9 @@ Kafka follows the platform pattern used by the `k8s-ollama` async service and th
 1. `manifests/17-kafka-vault-bootstrap.yaml` idempotently creates the CRM Kafka principal, a generated durable SCRAM password, topic/group ACL declarations, and the External Secrets Vault role.
 2. The central `kafka-security-reconciler` discovers the `kafka-scram-user-*` paths and creates the SCRAM principal and ACLs. It normally runs every five minutes and intentionally ignores brand-new values briefly.
 3. The CRM ExternalSecret materializes the username and password in namespace `crm`.
-4. `manifests/18-kafka-topic-setup.yaml` waits up to 12 minutes for the broker and reconciler, then creates or updates all three topics with explicit partition, retention, segment, cleanup, and minimum-ISR settings.
+4. `manifests/18-kafka-topic-setup.yaml` waits up to 12 minutes for the broker and reconciler, then creates or updates the command, retry, event, and DLQ topics with explicit partition, retention, segment, cleanup, and minimum-ISR settings.
 
-The topic setup uses three partitions and replication factor one, matching the current resource-constrained platform. Command retention is 7 days, event retention is 14 days, and DLQ retention is 90 days. Increase replication only after the Kafka cluster has enough brokers. The setup assumes the platform `kafka-security-reconciler` CronJob from `k8s-kafka` is deployed and healthy.
+The topic setup uses three partitions and replication factor one, matching the current resource-constrained platform. Command retention is 7 days, event retention is 14 days, and retry/DLQ retention is 90 days so a prolonged worker outage does not discard delayed work. Increase replication only after the Kafka cluster has enough brokers. The setup assumes the platform `kafka-security-reconciler` CronJob from `k8s-kafka` is deployed and healthy.
 
 ## Yugabyte bootstrap
 
@@ -111,7 +158,8 @@ Yugabyte is provisioned automatically during Argo sync using the same fixed-logi
 3. It registers Vault database static role `yugabyte-db/static-roles/suncoast-crm-login` with a 30-day rotation period.
 4. It creates a read-only Vault policy and Kubernetes auth role for service account `crm/crm-db-secret-sync`.
 5. `manifests/16-yugabyte-secret-sync.yaml` authenticates to Vault using that service account, reads the rotating username/password, and renders Kubernetes Secret `crm/suncoast-crm-database` with a URL-encoded `DATABASE_URL`.
-6. The migration Job consumes that Secret and creates `crm_entities`, `crm_operations`, and `crm_outbox` in schema `crm`.
+6. The migration Job consumes that Secret and creates `crm_entities`, `crm_operations`, `crm_outbox`, the durable `crm_notification_outbox`, and the custom-object definition/record/migration-ledger tables in schema `crm`.
+7. The same single Job reads the packaged `definitions/` directory, validates immutable version sequences and checksums, then reconciles Yugabyte and any configured HubSpot contact-property projections before application workloads start.
 
 No Yugabyte password or connection URL needs to be entered manually. The bootstrap assumes these existing platform dependencies:
 

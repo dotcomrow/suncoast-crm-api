@@ -107,6 +107,12 @@ spec:
               }
 
               reconcile_topic "$KAFKA_COMMAND_TOPIC" 3 604800000 3600000
+              reconcile_topic "$KAFKA_RETRY_TOPIC_1M" 3 7776000000 86400000
+              reconcile_topic "$KAFKA_RETRY_TOPIC_5M" 3 7776000000 86400000
+              reconcile_topic "$KAFKA_RETRY_TOPIC_30M" 3 7776000000 86400000
+              reconcile_topic "$KAFKA_RETRY_TOPIC_2H" 3 7776000000 86400000
+              reconcile_topic "$KAFKA_RETRY_TOPIC_6H" 3 7776000000 86400000
+              reconcile_topic "$KAFKA_RETRY_TOPIC_24H" 3 7776000000 86400000
               reconcile_topic "$KAFKA_EVENT_TOPIC" 3 1209600000 3600000
               reconcile_topic "$KAFKA_DLQ_TOPIC" 3 7776000000 86400000
               echo "CRM Kafka topic setup complete"

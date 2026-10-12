@@ -24,5 +24,6 @@ spec:
           command: ["node", "dist/migrate.js"]
           envFrom:
             - configMapRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-api }
             - secretRef: { name: suncoast-crm-database }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }

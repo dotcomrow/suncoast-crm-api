@@ -64,13 +64,37 @@ spec:
                 fi
               }
 
+              ensure_declared_value() {
+                path="$1"
+                desired="$2"
+                current="$(vault kv get -field=value "$path" 2>/dev/null || true)"
+                if [ "$current" = "$desired" ]; then
+                  echo "Preserving matching Vault declaration at ${path}"
+                else
+                  vault kv put "$path" value="$desired" >/dev/null
+                  echo "Reconciled Vault declaration at ${path}"
+                fi
+              }
+
+              ensure_generated_token() {
+                path="$1"
+                if current="$(vault kv get -field=token "$path" 2>/dev/null)" && [ -n "$current" ]; then
+                  echo "Preserving existing Vault token at ${path}"
+                else
+                  generated="$(dd if=/dev/urandom bs=48 count=1 2>/dev/null | base64 | tr '/+' '._' | tr -d '\n=')"
+                  vault kv put "$path" token="$generated" >/dev/null
+                  echo "Generated durable Vault token at ${path}"
+                fi
+              }
+
               BASE="secret/kafka-scram-user-suncoast-crm-api"
               ensure_value "$BASE" "suncoast-crm-api"
               ensure_generated_value "${BASE}-password"
-              ensure_value "${BASE}-topic-all" "crm.commands.v1,crm.events.v1,crm.commands.dlq.v1"
+              ensure_declared_value "${BASE}-topic-all" "crm.commands.v1,crm.commands.retry.1m.v1,crm.commands.retry.5m.v1,crm.commands.retry.30m.v1,crm.commands.retry.2h.v1,crm.commands.retry.6h.v1,crm.commands.retry.24h.v1,crm.events.v1,crm.commands.dlq.v1"
               ensure_value "${BASE}-group-read" "suncoast-crm-provider-workers-v1"
               ensure_value "${BASE}-group-describe" "suncoast-crm-provider-workers-v1"
               ensure_value "${BASE}-cluster-describe" "true"
+              ensure_generated_token "secret/platform-notification-service/clients/suncoast-crm-api"
 
               vault policy write suncoast-crm-api - <<'EOF'
               path "secret/data/suncoast-crm-api" {
@@ -80,6 +104,9 @@ spec:
                 capabilities = ["read"]
               }
               path "secret/data/kafka-scram-user-suncoast-crm-api-password" {
+                capabilities = ["read"]
+              }
+              path "secret/data/platform-notification-service/clients/suncoast-crm-api" {
                 capabilities = ["read"]
               }
               EOF
