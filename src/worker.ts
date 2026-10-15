@@ -243,6 +243,7 @@ while (!shuttingDown) {
         await processCommand(parsed.data);
       }
     });
+    break;
   } catch (error) {
     kafkaReady = false;
     if (shuttingDown) break;
