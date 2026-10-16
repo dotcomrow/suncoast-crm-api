@@ -68,12 +68,3 @@ spec:
           startupProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 5, failureThreshold: 24 }
           readinessProbe: { httpGet: { path: /readyz, port: health }, periodSeconds: 10, timeoutSeconds: 3 }
           livenessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 20, timeoutSeconds: 3 }
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: suncoast-crm-api
-  namespace: crm
-spec:
-  minAvailable: 1
-  selector: { matchLabels: { app: suncoast-crm-api, component: api } }
