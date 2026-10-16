@@ -18,3 +18,8 @@ spec:
       ports:
         - { protocol: TCP, port: 8080 }
         - { protocol: TCP, port: 4143 }
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: linkerd-viz } }
+      ports:
+        # Allow Linkerd Viz Prometheus to scrape the proxy admin metrics endpoint.
+        - { protocol: TCP, port: 4191 }
