@@ -90,7 +90,7 @@ spec:
               BASE="secret/kafka-scram-user-suncoast-crm-api"
               ensure_value "$BASE" "suncoast-crm-api"
               ensure_generated_value "${BASE}-password"
-              ensure_declared_value "${BASE}-topic-all" "crm.commands.v1,crm.commands.retry.1m.v1,crm.commands.retry.5m.v1,crm.commands.retry.30m.v1,crm.commands.retry.2h.v1,crm.commands.retry.6h.v1,crm.commands.retry.24h.v1,crm.events.v1,crm.commands.dlq.v1"
+              ensure_declared_value "${BASE}-topic-all" "crm.commands.v1,crm.commands.retry.1m.v1,crm.commands.retry.5m.v1,crm.commands.retry.30m.v1,crm.commands.retry.2h.v1,crm.commands.retry.6h.v1,crm.commands.retry.24h.v1,crm.events.v1,crm.email-validation.events.v1,crm.email-validation.actions.v1,crm.commands.dlq.v1"
               ensure_value "${BASE}-group-read" "suncoast-crm-provider-workers-v1"
               ensure_value "${BASE}-group-describe" "suncoast-crm-provider-workers-v1"
               ensure_value "${BASE}-cluster-describe" "true"

@@ -14,6 +14,11 @@ data:
   # Add HUBSPOT_PORTAL_ID and map names to real form GUIDs before enabling forms.
   # Example: {"newsletter":"12345678-1234-1234-1234-123456789abc"}
   HUBSPOT_FORM_IDS: '{}'
+  EMAIL_VALIDATION_RULES_ENABLED: "false"
+  KIE_SERVER_BASE_URL: "http://kie-server-auth-proxy.drools.svc.cluster.local:8080/kie-server/services/rest/server"
+  KIE_EMAIL_VALIDATION_CONTAINER: "email-validation-policy"
+  KIE_EMAIL_VALIDATION_SESSION: "email-validation-ksession"
+  KIE_REQUEST_TIMEOUT_MS: "10000"
   KAFKA_BROKERS: "kafka.kafka.svc.internal.lan:9092"
   KAFKA_CLIENT_ID: "suncoast-crm-api"
   KAFKA_CONSUMER_GROUP: "suncoast-crm-provider-workers-v1"
@@ -25,6 +30,8 @@ data:
   KAFKA_RETRY_TOPIC_6H: "crm.commands.retry.6h.v1"
   KAFKA_RETRY_TOPIC_24H: "crm.commands.retry.24h.v1"
   KAFKA_EVENT_TOPIC: "crm.events.v1"
+  KAFKA_EMAIL_VALIDATION_EVENT_TOPIC: "crm.email-validation.events.v1"
+  KAFKA_EMAIL_VALIDATION_ACTION_TOPIC: "crm.email-validation.actions.v1"
   KAFKA_DLQ_TOPIC: "crm.commands.dlq.v1"
   KAFKA_SECURITY_PROTOCOL: "SASL_PLAINTEXT"
   KAFKA_SASL_MECHANISM: "scram-sha-256"

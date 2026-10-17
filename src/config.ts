@@ -32,6 +32,8 @@ const env = z.object({
   KAFKA_RETRY_TOPIC_6H: z.string().default("crm.commands.retry.6h.v1"),
   KAFKA_RETRY_TOPIC_24H: z.string().default("crm.commands.retry.24h.v1"),
   KAFKA_EVENT_TOPIC: z.string().default("crm.events.v1"),
+  KAFKA_EMAIL_VALIDATION_EVENT_TOPIC: z.string().default("crm.email-validation.events.v1"),
+  KAFKA_EMAIL_VALIDATION_ACTION_TOPIC: z.string().default("crm.email-validation.actions.v1"),
   KAFKA_DLQ_TOPIC: z.string().default("crm.commands.dlq.v1"),
   KAFKA_SECURITY_PROTOCOL: z.enum(["PLAINTEXT", "SASL_PLAINTEXT", "SASL_SSL"]).default("SASL_PLAINTEXT"),
   KAFKA_SASL_MECHANISM: z.enum(["plain", "scram-sha-256", "scram-sha-512"]).default("scram-sha-256"),
@@ -48,7 +50,12 @@ const env = z.object({
   PLATFORM_NOTIFICATION_TOKEN: z.string().optional(),
   HUBSPOT_FAILURE_NOTIFICATION_EMAIL: z.string().email().default("administrator@suncoast.systems"),
   NOTIFICATION_OUTBOX_POLL_MS: z.coerce.number().int().positive().default(10000),
-  WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(8081)
+  WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(8081),
+  EMAIL_VALIDATION_RULES_ENABLED: bool,
+  KIE_SERVER_BASE_URL: z.string().url().default("http://kie-server-auth-proxy.drools.svc.cluster.local:8080/kie-server/services/rest/server"),
+  KIE_EMAIL_VALIDATION_CONTAINER: z.string().default("email-validation-policy"),
+  KIE_EMAIL_VALIDATION_SESSION: z.string().default("email-validation-ksession"),
+  KIE_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000)
 }).superRefine((value, ctx) => {
   if ((value.KAFKA_SASL_USERNAME && !value.KAFKA_SASL_PASSWORD) || (!value.KAFKA_SASL_USERNAME && value.KAFKA_SASL_PASSWORD)) {
     ctx.addIssue({ code: "custom", message: "Kafka username and password must be configured together" });

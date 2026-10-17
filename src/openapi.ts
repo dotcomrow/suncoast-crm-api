@@ -46,12 +46,34 @@ const formSubmission = {
     created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" }
   }
 };
+const emailValidation = {
+  type: "object", required: ["id", "form_submission_id", "provider", "email", "purpose", "status", "created_at", "updated_at"], properties: {
+    id: { type: "string", format: "uuid" }, form_submission_id: { type: "string", format: "uuid" }, provider: { type: "string" },
+    email: { type: "string", format: "email" }, purpose: { type: "string" }, user_id: { type: "string", nullable: true }, status: { type: "string", enum: ["pending", "validated", "failed", "expired"] },
+    provider_status: { type: "string", nullable: true }, provider_contact_id: { type: "string", nullable: true },
+    validated_at: { type: "string", format: "date-time", nullable: true }, completed_at: { type: "string", format: "date-time", nullable: true }, checked_at: { type: "string", format: "date-time", nullable: true }, action_plan: { type: "array", nullable: true, items: { type: "string" } }, rule_set_version: { type: "string", nullable: true },
+    created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" }
+  }
+};
 
 export function openApiSpec() {
   return {
     openapi: "3.0.3", info: { title: "Suncoast CRM API", version: "1.0.0", description: "Stable provider-neutral CRM contract. Writes are durable asynchronous operations." },
-    servers: [{ url: config().OPENAPI_SERVER_URL }], security: [{ bearerAuth: [] }], tags: [{ name: "CRM" }, { name: "Forms" }, { name: "Custom Objects" }, { name: "Operations" }, { name: "AI" }],
+    servers: [{ url: config().OPENAPI_SERVER_URL }], security: [{ bearerAuth: [] }], tags: [{ name: "CRM" }, { name: "Email Validation" }, { name: "Forms" }, { name: "Custom Objects" }, { name: "Operations" }, { name: "AI" }],
     paths: {
+      "/v1/email-validations": {
+        post: { tags: ["Email Validation"], operationId: "createEmailValidation", description: "Creates a pending email validation and durably submits the configured purpose-specific provider form. With HubSpot double opt-in enabled, this starts the confirmation flow.", parameters: [idempotency], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["email", "purpose"], properties: { email: { type: "string", format: "email" }, purpose: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,62}$" }, user_id: { type: "string", maxLength: 255 }, fields: { type: "object", additionalProperties: true }, context: formSubmissionWrite.properties.context, consent: formSubmissionWrite.properties.consent } } } } }, responses: { "202": { description: "Validation pending; provider form durably queued" }, "404": { $ref: "#/components/responses/Error" } } }
+      },
+      "/v1/email-validations/{validationId}": {
+        get: { tags: ["Email Validation"], operationId: "getEmailValidation", description: "Returns the local validation state and refreshes it from the provider by default. Only validated is safe for subscription activation.", parameters: [{ name: "validationId", in: "path", required: true, schema: { type: "string", format: "uuid" } }, { name: "refresh", in: "query", schema: { type: "boolean", default: true } }], responses: { "200": { description: "Email validation state", content: { "application/json": { schema: { $ref: "#/components/schemas/EmailValidation" } } } }, "404": { $ref: "#/components/responses/Error" } } }
+      },
+      "/v1/email-validations/{validationId}/outcome": {
+        post: { tags: ["Email Validation"], operationId: "completeEmailValidationOutcome", description: "Administratively records a failed or expired validation and emits its rules-derived action plan.", parameters: [idempotency, { name: "validationId", in: "path", required: true, schema: { type: "string", format: "uuid" } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["outcome", "reason"], properties: { outcome: { type: "string", enum: ["failed", "expired"] }, reason: { type: "string" } } } } } }, responses: { "200": { description: "Terminal validation state" }, "404": { $ref: "#/components/responses/Error" } } }
+      },
+      "/v1/email-validation-action-config/users/{userId}": {
+        get: { tags: ["Email Validation"], operationId: "getUserEmailValidationActions", parameters: [{ name: "userId", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Additive per-user actions" } } },
+        put: { tags: ["Email Validation"], operationId: "putUserEmailValidationActions", parameters: [idempotency, { name: "userId", in: "path", required: true, schema: { type: "string" } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["purpose"], properties: { purpose: { type: "string" }, success_actions: { type: "array", items: { type: "string" } }, failure_actions: { type: "array", items: { type: "string" } }, expired_actions: { type: "array", items: { type: "string" } } } } } } }, responses: { "200": { description: "Updated additive per-user actions" } } }
+      },
       "/v1/forms/{formName}/submissions": {
         post: { tags: ["Forms"], operationId: "submitCrmForm", description: "Durably queues a configured provider form submission. HubSpot forms can trigger double opt-in when enabled in HubSpot.", parameters: [idempotency, formName], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/FormSubmissionWrite" } } } }, responses: { "202": accepted, "404": { $ref: "#/components/responses/Error" } } }
       },
@@ -106,6 +128,7 @@ export function openApiSpec() {
       CustomObjectRecord: { type: "object", required: ["id", "object_name", "contact_id", "properties", "version"], properties: { id: { type: "string", format: "uuid" }, object_name: { type: "string" }, contact_id: { type: "string", format: "uuid" }, provider_id: { type: "string", nullable: true }, properties: { type: "object", additionalProperties: true }, version: { type: "integer" }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" } } },
       FormSubmissionWrite: formSubmissionWrite,
       FormSubmission: formSubmission,
+      EmailValidation: emailValidation,
       QueuedOperation: queued,
       Error: error
     }, responses: {

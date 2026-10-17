@@ -197,8 +197,8 @@ const healthServer = createServer(async (request, response) => {
   }
   if (request.url === "/readyz") {
     try {
-      const schema = await pool.query("SELECT to_regclass('crm.crm_operations') AS operations, to_regclass('crm.crm_custom_object_records') AS custom_records, to_regclass('crm.crm_form_submissions') AS form_submissions");
-      const ready = kafkaReady && Boolean(schema.rows[0]?.operations) && Boolean(schema.rows[0]?.custom_records) && Boolean(schema.rows[0]?.form_submissions) && !shuttingDown;
+      const schema = await pool.query("SELECT to_regclass('crm.crm_operations') AS operations, to_regclass('crm.crm_custom_object_records') AS custom_records, to_regclass('crm.crm_form_submissions') AS form_submissions, to_regclass('crm.crm_email_validations') AS email_validations, to_regclass('crm.crm_email_validation_action_registry') AS action_registry");
+      const ready = kafkaReady && Boolean(schema.rows[0]?.operations) && Boolean(schema.rows[0]?.custom_records) && Boolean(schema.rows[0]?.form_submissions) && Boolean(schema.rows[0]?.email_validations) && Boolean(schema.rows[0]?.action_registry) && !shuttingDown;
       response.writeHead(ready ? 200 : 503).end(ready ? "ready" : "not ready");
     } catch {
       response.writeHead(503).end("not ready");

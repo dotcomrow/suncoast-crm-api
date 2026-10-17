@@ -46,6 +46,26 @@ test("HubSpot adapter submits configured forms through the secure Forms API", as
   assert.equal(result.inlineMessage, "Thanks");
 });
 
+test("HubSpot adapter recognizes a confirmed double-opt-in email", async (t) => {
+  const requests: string[] = [];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    requests.push(String(url));
+    if (String(url).includes("/properties/contacts/")) {
+      return new Response(JSON.stringify({ options: [{ label: "User clicked confirmation", value: "OPT_IN" }] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: "contact-123", properties: { hs_emailconfirmationstatus: "OPT_IN" } }), { status: 200 });
+  });
+  const result = await new HubSpotProvider("secret", "https://api.hubapi.test", "suncoast_crm_id").getEmailValidation("Person+news@example.com");
+  assert.equal(requests[0], "https://api.hubapi.test/crm/v3/objects/contacts/Person%2Bnews%40example.com?idProperty=email&properties=hs_emailconfirmationstatus");
+  assert.deepEqual(result, { status: "validated", providerStatus: "OPT_IN", providerContactId: "contact-123" });
+});
+
+test("HubSpot adapter keeps missing contacts pending", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response("not found", { status: 404 }));
+  const result = await new HubSpotProvider("secret", "https://api.hubapi.test", "suncoast_crm_id").getEmailValidation("pending@example.com");
+  assert.deepEqual(result, { status: "pending", providerStatus: "CONTACT_NOT_FOUND" });
+});
+
 test("HubSpot adapter uses the built-in unique ID for notes", async (t) => {
   let body: Record<string, unknown> | undefined;
   t.mock.method(globalThis, "fetch", async (_url, init) => {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { CrmEntity, EntityType, ProviderWriteResult } from "../types.js";
 import type { CustomFieldDefinition, CustomObjectDefinition, CustomObjectDefinitionInput } from "../custom-objects.js";
-import type { CrmProvider, FormSubmission, ListOptions } from "./provider.js";
+import type { CrmProvider, EmailValidationResult, FormSubmission, ListOptions } from "./provider.js";
 import { ProviderError } from "./provider.js";
 
 interface HubSpotObject { id: string; properties?: Record<string, unknown>; }
@@ -13,6 +13,10 @@ const builtInIdempotencyProperties: Partial<Record<EntityType, string>> = { acti
 const standardPropertyGroups: Partial<Record<EntityType, string>> = {
   contacts: "contactinformation", companies: "companyinformation", deals: "dealinformation"
 };
+const confirmedEmailStatusLabels = new Set([
+  "confirmed", "user clicked confirmation", "hubspot rep marked confirmed", "customer marked confirmed",
+  "confirmed from previous behavior", "confirmed due to form"
+]);
 
 export class HubSpotProvider implements CrmProvider {
   readonly name = "hubspot";
@@ -108,6 +112,27 @@ export class HubSpotProvider implements CrmProvider {
     }
     if (response.status === 204) return {};
     return await response.json() as Record<string, unknown>;
+  }
+
+  async getEmailValidation(email: string): Promise<EmailValidationResult> {
+    let contact: HubSpotObject;
+    try {
+      contact = await this.request<HubSpotObject>(`/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email&properties=hs_emailconfirmationstatus`);
+    } catch (error) {
+      if (error instanceof ProviderError && error.status === 404) return { status: "pending", providerStatus: "CONTACT_NOT_FOUND" };
+      throw error;
+    }
+    const providerStatus = typeof contact.properties?.hs_emailconfirmationstatus === "string"
+      ? contact.properties.hs_emailconfirmationstatus : null;
+    if (!providerStatus) return { status: "pending", providerStatus, providerContactId: contact.id };
+
+    const property = await this.request<{ options?: Array<{ label?: string; value?: string }> }>("/crm/v3/properties/contacts/hs_emailconfirmationstatus");
+    const label = property.options?.find((option) => option.value === providerStatus)?.label?.trim().toLowerCase();
+    return {
+      status: label && confirmedEmailStatusLabels.has(label) ? "validated" : "pending",
+      providerStatus,
+      providerContactId: contact.id
+    };
   }
 
   private customProperty(field: CustomFieldDefinition) {

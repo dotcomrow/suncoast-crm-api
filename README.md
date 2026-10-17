@@ -38,6 +38,16 @@ HUBSPOT_FORM_IDS: '{"newsletter":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","product
 
 The submitted `fields` names must match fields on the selected HubSpot form. If HubSpot privacy/consent collection is enabled, submit the user-visible consent text and subscription type through the optional `consent` object; the API only accepts affirmative consent values. Do not treat a successful Forms API submission as double-opt-in confirmation: `submitted` means HubSpot accepted the form and the contact may still be awaiting the confirmation click.
 
+The provider-neutral email-validation facade builds on those forms:
+
+- `POST /v1/email-validations` accepts an `email`, a configured `purpose` such as `newsletter`, and optional form fields/context/consent. It returns a durable validation ID with `status: pending`.
+- `GET /v1/email-validations/{validationId}` refreshes HubSpot's automatically managed `hs_emailconfirmationstatus` and changes the local state to `validated` only for one of HubSpot's confirmed double-opt-in states. Pass `?refresh=false` to read only the stored state.
+- Downstream newsletter, update, or other subscription records should retain the validation ID and remain pending unless this endpoint returns `status: validated`. A submitted form or a HubSpot contact ID is not validation proof.
+
+HubSpot does not expose a general mailbox-deliverability validator through this integration. This API represents ownership/consent confirmation through HubSpot double opt-in. The HubSpot private app needs contact read access in addition to the existing form submission access so the adapter can inspect the confirmation property.
+
+Terminal validation outcomes are evaluated by the dedicated `email-validation-policy` KIE container. Git-managed mandatory/default actions are combined with additive per-user actions configured through `GET|PUT /v1/email-validation-action-config/users/{userId}`. Drools validates and snapshots the plan; the database transaction that changes the validation state then emits `crm.email-validation.events.v1` and one idempotent command per action on `crm.email-validation.actions.v1`. Keep `EMAIL_VALIDATION_RULES_ENABLED=false` until the KJAR is published and registered, then enable it in a separate reviewed rollout.
+
 ## Custom objects
 
 Custom-object schemas are Git-managed deployment assets under `definitions/`; there is no runtime HTTP endpoint that can create or alter them. The single database migration Job validates and reconciles those files after applying SQL migrations, before the API and worker deploy. It records each object name, integer version, filename, and SHA-256 checksum in `crm_custom_object_definition_migrations`. An edited applied file, a skipped version, or an incompatible field definition fails the deployment.
