@@ -108,8 +108,8 @@ spec:
                 metadata_name="c$(printf '%s' "$field_name" | cut -c1 | tr '[:lower:]' '[:upper:]')$(printf '%s' "$field_name" | cut -c2-)"
                 existing_type="$(jq -r --arg name "$metadata_name" '.entityDefs.Contact.fields[$name].type // empty' /tmp/metadata.json)"
                 if [ -z "$existing_type" ]; then
-                  field_payload="$(jq -cn --arg name "$field_name" --arg label "$field_label" --arg type "$field_type" \
-                    '{name:$name,label:$label,type:$type,required:false,audited:true}')"
+                  field_payload="$(jq -cn --arg fieldName "$field_name" --arg fieldLabel "$field_label" --arg fieldType "$field_type" \
+                    '{name:$fieldName,label:$fieldLabel,type:$fieldType,required:false,audited:true}')"
                   request POST /Admin/fieldManager/Contact "/tmp/field-Contact-$field_name.json" "$field_payload"
                   test "$(jq -r '.type // empty' "/tmp/field-Contact-$field_name.json")" = "$field_type"
                   echo "Created Contact.$metadata_name"
