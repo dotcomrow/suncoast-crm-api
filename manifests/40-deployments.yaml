@@ -10,7 +10,7 @@ metadata:
   name: suncoast-crm-api
   namespace: crm
   annotations:
-    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-wave: "7"
     reloader.stakater.com/auto: "true"
 spec:
   replicas: 2
@@ -43,7 +43,7 @@ metadata:
   name: suncoast-crm-worker
   namespace: crm
   annotations:
-    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-wave: "7"
     reloader.stakater.com/auto: "true"
 spec:
   replicas: 1

@@ -45,7 +45,6 @@ spec:
               facade_password="$(printf '%s' "$crm_secret" | jq -r '.data.data.facade_database_password // empty')"
               espocrm_password="$(printf '%s' "$crm_secret" | jq -r '.data.data.espocrm_database_password // empty')"
               espocrm_admin_password="$(printf '%s' "$crm_secret" | jq -r '.data.data.espocrm_admin_password // empty')"
-              espocrm_api_key="$(printf '%s' "$crm_secret" | jq -r '.data.data.espocrm_api_key // empty')"
               if [ -z "$facade_password" ]; then
                 facade_password="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
                 vault kv patch secret/suncoast-crm-api facade_database_password="$facade_password" >/dev/null
@@ -61,12 +60,6 @@ spec:
                 vault kv patch secret/suncoast-crm-api espocrm_admin_password="$espocrm_admin_password" >/dev/null
                 echo "Generated the initial EspoCRM administrator password"
               fi
-              if [ -z "$espocrm_api_key" ]; then
-                espocrm_api_key="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
-                vault kv patch secret/suncoast-crm-api espocrm_api_key="$espocrm_api_key" >/dev/null
-                echo "Generated the reserved EspoCRM API key"
-              fi
-
               tunnel_host="$(vault kv get -field=value secret/directus_db_ssh_tunnel_host)"
               # The Directus deployment treats the tunnel user as optional and
               # falls back to the Oracle image's default SSH account. Keep the

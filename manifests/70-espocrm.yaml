@@ -112,9 +112,6 @@ spec:
             - { name: PRIVATE_KEY_B64, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: private_key_b64 } } }
           readinessProbe: { tcpSocket: { port: postgres }, periodSeconds: 10, timeoutSeconds: 3 }
           livenessProbe: { tcpSocket: { port: postgres }, periodSeconds: 30, timeoutSeconds: 3 }
-          resources:
-            requests: { cpu: 10m, memory: 32Mi }
-            limits: { memory: 128Mi }
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
 ---
 apiVersion: v1
@@ -188,9 +185,6 @@ spec:
             - { name: PRIVATE_KEY_B64, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: private_key_b64 } } }
           readinessProbe: { tcpSocket: { port: 15433 }, periodSeconds: 10, timeoutSeconds: 3 }
           livenessProbe: { tcpSocket: { port: 15433 }, periodSeconds: 30, timeoutSeconds: 3 }
-          resources:
-            requests: { cpu: 10m, memory: 32Mi }
-            limits: { memory: 128Mi }
           securityContext: { allowPrivilegeEscalation: false }
         - name: web
           image: espocrm/espocrm:10.0.10
@@ -213,9 +207,6 @@ spec:
           startupProbe: { exec: { command: ["bin/command", "app-check"] }, periodSeconds: 10, failureThreshold: 60 }
           readinessProbe: { exec: { command: ["bin/command", "app-check"] }, periodSeconds: 30, timeoutSeconds: 20 }
           livenessProbe: { exec: { command: ["bin/command", "app-check"] }, periodSeconds: 60, timeoutSeconds: 20 }
-          resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { memory: 1Gi }
           securityContext: { allowPrivilegeEscalation: false }
         - name: daemon
           image: espocrm/espocrm:10.0.10
@@ -225,9 +216,6 @@ spec:
             - { name: espocrm-data, mountPath: /var/www/html/data }
             - { name: espocrm-data, mountPath: /var/www/html/custom, subPath: custom }
             - { name: espocrm-data, mountPath: /var/www/html/client/custom, subPath: client-custom }
-          resources:
-            requests: { cpu: 50m, memory: 128Mi }
-            limits: { memory: 512Mi }
           securityContext: { allowPrivilegeEscalation: false }
       volumes:
         - name: espocrm-data

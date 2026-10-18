@@ -1,0 +1,220 @@
+# Reconcile the EspoCRM service role and API user after EspoCRM is healthy.
+# The generated key is durable in Vault and is materialized for the API and
+# worker by the ExternalSecret in the following sync wave.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: suncoast-crm-espocrm-api-bootstrap
+  namespace: vault
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: suncoast-crm-espocrm-api-bootstrap
+      annotations:
+        linkerd.io/inject: "disabled"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      volumes:
+        - name: vault-root-token
+          secret:
+            secretName: vault-root-token
+      containers:
+        - name: bootstrap
+          image: hashicorp/vault:1.15.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              apk add --no-cache curl jq >/dev/null
+              export VAULT_ADDR="http://vault.vault.svc.cluster.local:8200"
+              if [ -f /vault-token/VAULT_TOKEN ]; then
+                export VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
+              elif [ -f /vault-token/token ]; then
+                export VAULT_TOKEN="$(cat /vault-token/token)"
+              else
+                echo "Vault root-token file is unavailable" >&2
+                exit 1
+              fi
+
+              ESPO_BASE="http://espocrm.crm.svc.cluster.local/api/v1"
+              ADMIN_PASSWORD="$(vault kv get -field=espocrm_admin_password secret/suncoast-crm-api)"
+              OIDC_CLIENT_ID="$(vault kv get -field=value secret/keycloak-client-id-espocrm)"
+              OIDC_CLIENT_SECRET="$(vault kv get -field=value secret/keycloak-client-secret-espocrm)"
+              test -n "$ADMIN_PASSWORD"
+              test -n "$OIDC_CLIENT_ID"; test -n "$OIDC_CLIENT_SECRET"
+              ADMIN_AUTH="$(printf 'admin:%s' "$ADMIN_PASSWORD" | base64 | tr -d '\n')"
+              unset ADMIN_PASSWORD
+
+              request() {
+                method="$1"; path="$2"; output="$3"; payload="${4:-}"
+                if [ -n "$payload" ]; then
+                  status="$(curl -sS -o "$output" -w '%{http_code}' -X "$method" \
+                    -H "Authorization: Basic $ADMIN_AUTH" -H 'Content-Type: application/json' \
+                    --data "$payload" "$ESPO_BASE$path")"
+                else
+                  status="$(curl -sS -o "$output" -w '%{http_code}' -X "$method" \
+                    -H "Authorization: Basic $ADMIN_AUTH" "$ESPO_BASE$path")"
+                fi
+                case "$status" in
+                  2??) ;;
+                  *) echo "EspoCRM $method $path failed with HTTP $status" >&2; cat "$output" >&2; exit 1 ;;
+                esac
+              }
+
+              echo "Waiting for EspoCRM administrator API readiness"
+              ready=false
+              for attempt in $(seq 1 90); do
+                status="$(curl -sS -o /tmp/app-user.json -w '%{http_code}' \
+                  -H "Authorization: Basic $ADMIN_AUTH" "$ESPO_BASE/App/user" || true)"
+                if [ "$status" = 200 ]; then ready=true; break; fi
+                sleep 5
+              done
+              test "$ready" = true
+
+              # The provider uses this custom field as its durable replay key.
+              # EspoCRM adds the `c` prefix when creating a field on a native
+              # entity, so `suncoastCrmId` becomes `cSuncoastCrmId`.
+              request GET /Metadata /tmp/metadata.json
+              for entity in Contact Account Opportunity Task; do
+                field_type="$(jq -r --arg entity "$entity" \
+                  '.entityDefs[$entity].fields.cSuncoastCrmId.type // empty' /tmp/metadata.json)"
+                if [ -z "$field_type" ]; then
+                  field_payload='{"name":"suncoastCrmId","label":"Suncoast CRM ID","type":"varchar","maxLength":64,"required":false,"audited":false}'
+                  request POST "/Admin/fieldManager/$entity" "/tmp/field-$entity.json" "$field_payload"
+                  test "$(jq -r '.type // empty' "/tmp/field-$entity.json")" = varchar
+                  echo "Created cSuncoastCrmId on $entity"
+                elif [ "$field_type" != varchar ]; then
+                  echo "$entity.cSuncoastCrmId has unexpected type $field_type" >&2
+                  exit 1
+                else
+                  echo "Preserving $entity.cSuncoastCrmId"
+                fi
+              done
+
+              role_name="Suncoast CRM API"
+              request GET '/Role?maxSize=200&select=id,name' /tmp/roles.json
+              role_id="$(jq -r --arg name "$role_name" '.list[]? | select(.name == $name) | .id' /tmp/roles.json | head -n1)"
+              role_scopes='{
+                "Account":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Contact":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Opportunity":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Task":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"}
+              }'
+
+              if [ -z "$role_id" ]; then
+                payload="$(jq -cn --arg name "$role_name" --argjson data "$role_scopes" \
+                  '{name:$name,data:$data,assignmentPermission:"all",userPermission:"no"}')"
+                request POST /Role /tmp/role.json "$payload"
+                role_id="$(jq -r '.id // empty' /tmp/role.json)"
+                test -n "$role_id"
+                echo "Created the EspoCRM service role"
+              else
+                request GET "/Role/$role_id" /tmp/role.json
+                payload="$(jq -c --argjson scopes "$role_scopes" \
+                  '{data:((.data // {}) * $scopes),assignmentPermission:"all",userPermission:"no"}' /tmp/role.json)"
+                request PUT "/Role/$role_id" /tmp/role-updated.json "$payload"
+                echo "Reconciled the EspoCRM service role"
+              fi
+
+              gui_role_name="Suncoast CRM Users"
+              gui_role_id="$(jq -r --arg name "$gui_role_name" '.list[]? | select(.name == $name) | .id' /tmp/roles.json | head -n1)"
+              gui_scopes='{
+                "Account":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Contact":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Lead":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Opportunity":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Task":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Meeting":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Call":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Case":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "Email":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "User":{"create":"no","read":"all","edit":"no","delete":"no","stream":"no"}
+              }'
+              if [ -z "$gui_role_id" ]; then
+                payload="$(jq -cn --arg name "$gui_role_name" --argjson data "$gui_scopes" \
+                  '{name:$name,data:$data,assignmentPermission:"all",userPermission:"no"}')"
+                request POST /Role /tmp/gui-role.json "$payload"
+                gui_role_id="$(jq -r '.id // empty' /tmp/gui-role.json)"
+                test -n "$gui_role_id"
+                echo "Created the EspoCRM GUI-user role"
+              else
+                request GET "/Role/$gui_role_id" /tmp/gui-role.json
+                payload="$(jq -c --argjson scopes "$gui_scopes" \
+                  '{data:((.data // {}) * $scopes),assignmentPermission:"all",userPermission:"no"}' /tmp/gui-role.json)"
+                request PUT "/Role/$gui_role_id" /tmp/gui-role-updated.json "$payload"
+                echo "Reconciled the EspoCRM GUI-user role"
+              fi
+
+              user_name="suncoast-crm-api"
+              request GET '/User?maxSize=200&select=id,userName,type,isActive,authMethod,rolesIds,apiKey' /tmp/users.json
+              user_id="$(jq -r --arg name "$user_name" '.list[]? | select(.userName == $name and .type == "api") | .id' /tmp/users.json | head -n1)"
+              user_payload="$(jq -cn --arg name "$user_name" --arg role "$role_id" \
+                '{userName:$name,lastName:"Suncoast CRM API",type:"api",isActive:true,authMethod:"ApiKey",rolesIds:[$role]}')"
+
+              if [ -z "$user_id" ]; then
+                request POST /User /tmp/user.json "$user_payload"
+                user_id="$(jq -r '.id // empty' /tmp/user.json)"
+                api_key="$(jq -r '.apiKey // empty' /tmp/user.json)"
+                echo "Created the EspoCRM API user"
+              else
+                request PUT "/User/$user_id" /tmp/user-updated.json "$user_payload"
+                request GET "/User/$user_id" /tmp/user.json
+                api_key="$(jq -r '.apiKey // empty' /tmp/user.json)"
+                echo "Reconciled the EspoCRM API user"
+              fi
+              test -n "$user_id"; test -n "$api_key"
+
+              status="$(curl -sS -o /tmp/api-user-check.json -w '%{http_code}' \
+                -H "X-Api-Key: $api_key" "$ESPO_BASE/App/user")"
+              if [ "$status" != 200 ]; then
+                echo "Generated EspoCRM API-user credential failed authentication with HTTP $status" >&2
+                exit 1
+              fi
+
+              vault kv patch secret/suncoast-crm-api \
+                espocrm_api_key="$api_key" espocrm_api_user_id="$user_id" >/dev/null
+              unset api_key
+
+              oidc_payload="$(jq -cn \
+                --arg clientId "$OIDC_CLIENT_ID" \
+                --arg clientSecret "$OIDC_CLIENT_SECRET" \
+                --arg baselineRoleId "$gui_role_id" '{
+                  siteUrl:"https://espocrm.teleport.app.suncoast.systems",
+                  authenticationMethod:"Oidc",
+                  oidcClientId:$clientId,
+                  oidcClientSecret:$clientSecret,
+                  oidcAuthorizationEndpoint:"https://auth.suncoast.systems/realms/internal/protocol/openid-connect/auth",
+                  oidcTokenEndpoint:"https://auth.suncoast.systems/realms/internal/protocol/openid-connect/token",
+                  oidcUserInfoEndpoint:"https://auth.suncoast.systems/realms/internal/protocol/openid-connect/userinfo",
+                  oidcJwksEndpoint:"https://auth.suncoast.systems/realms/internal/protocol/openid-connect/certs",
+                  oidcJwtSignatureAlgorithmList:["RS256"],
+                  oidcScopes:["openid","profile","email"],
+                  oidcUsernameClaim:"preferred_username",
+                  oidcCreateUser:true,
+                  oidcSync:true,
+                  oidcSyncTeams:false,
+                  oidcAuthorizationPkce:true,
+                  oidcAuthorizationPrompt:"consent",
+                  oidcFallback:true,
+                  oidcAllowRegularUserFallback:false,
+                  oidcAllowAdminUser:true,
+                  oidcLogoutUrl:"https://auth.suncoast.systems/realms/internal/protocol/openid-connect/logout?post_logout_redirect_uri={siteUrl}&client_id={clientId}",
+                  baselineRoleId:$baselineRoleId
+                }')"
+              request PUT /Settings /tmp/settings.json "$oidc_payload"
+              test "$(jq -r '.authenticationMethod // empty' /tmp/settings.json)" = Oidc
+              unset ADMIN_AUTH OIDC_CLIENT_SECRET oidc_payload
+              echo "EspoCRM API credentials and native Keycloak OIDC login are reconciled"
+          volumeMounts:
+            - name: vault-root-token
+              mountPath: /vault-token
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false

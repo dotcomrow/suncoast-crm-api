@@ -1,0 +1,120 @@
+# Reconcile the confidential Keycloak client used by EspoCRM's native OIDC
+# login. The client ID and secret are durable in Vault and survive rebuilds.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: suncoast-crm-keycloak-client-bootstrap
+  namespace: vault
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: suncoast-crm-keycloak-client-bootstrap
+      annotations:
+        linkerd.io/inject: "disabled"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      volumes:
+        - name: vault-root-token
+          secret:
+            secretName: vault-root-token
+      containers:
+        - name: bootstrap
+          image: hashicorp/vault:1.15.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              apk add --no-cache curl jq >/dev/null
+              export VAULT_ADDR="http://vault.vault.svc.cluster.local:8200"
+              if [ -f /vault-token/VAULT_TOKEN ]; then
+                export VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
+              elif [ -f /vault-token/token ]; then
+                export VAULT_TOKEN="$(cat /vault-token/token)"
+              else
+                echo "Vault root-token file is unavailable" >&2
+                exit 1
+              fi
+
+              CLIENT_ID="$(vault kv get -field=value secret/keycloak-client-id-espocrm 2>/dev/null || true)"
+              if [ -z "$CLIENT_ID" ]; then
+                CLIENT_ID=espocrm
+                vault kv put secret/keycloak-client-id-espocrm value="$CLIENT_ID" >/dev/null
+              fi
+              CLIENT_SECRET="$(vault kv get -field=value secret/keycloak-client-secret-espocrm 2>/dev/null || true)"
+              if [ -z "$CLIENT_SECRET" ]; then
+                CLIENT_SECRET="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)"
+                vault kv put secret/keycloak-client-secret-espocrm value="$CLIENT_SECRET" >/dev/null
+                echo "Generated the durable EspoCRM OIDC client secret"
+              fi
+
+              KC_USERNAME="$(vault kv get -field=username secret/keycloak/admin)"
+              KC_PASSWORD="$(vault kv get -field=password secret/keycloak/admin)"
+              KC_BASE="http://keycloak.keycloak.svc.cluster.local:8080"
+
+              token_ready=false
+              for attempt in $(seq 1 60); do
+                token_response="$(curl -sS -X POST "$KC_BASE/realms/master/protocol/openid-connect/token" \
+                  -H 'Content-Type: application/x-www-form-urlencoded' \
+                  --data-urlencode client_id=admin-cli \
+                  --data-urlencode grant_type=password \
+                  --data-urlencode "username=$KC_USERNAME" \
+                  --data-urlencode "password=$KC_PASSWORD" || true)"
+                ACCESS_TOKEN="$(printf '%s' "$token_response" | jq -r '.access_token // empty')"
+                if [ -n "$ACCESS_TOKEN" ]; then token_ready=true; break; fi
+                sleep 5
+              done
+              unset KC_PASSWORD token_response
+              test "$token_ready" = true
+
+              client_payload="$(jq -cn --arg id "$CLIENT_ID" --arg secret "$CLIENT_SECRET" '{
+                clientId:$id,
+                name:"EspoCRM",
+                description:"EspoCRM GUI native OIDC login",
+                protocol:"openid-connect",
+                publicClient:false,
+                clientAuthenticatorType:"client-secret",
+                secret:$secret,
+                enabled:true,
+                standardFlowEnabled:true,
+                implicitFlowEnabled:false,
+                directAccessGrantsEnabled:false,
+                serviceAccountsEnabled:false,
+                frontchannelLogout:true,
+                redirectUris:["https://espocrm.teleport.app.suncoast.systems/*"],
+                webOrigins:["https://espocrm.teleport.app.suncoast.systems"],
+                attributes:{
+                  "pkce.code.challenge.method":"S256",
+                  "post.logout.redirect.uris":"https://espocrm.teleport.app.suncoast.systems/*"
+                }
+              }')"
+
+              existing="$(curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" \
+                "$KC_BASE/admin/realms/internal/clients?clientId=$CLIENT_ID")"
+              internal_id="$(printf '%s' "$existing" | jq -r '.[0].id // empty')"
+              if [ -z "$internal_id" ]; then
+                status="$(curl -sS -o /tmp/keycloak-client.json -w '%{http_code}' -X POST \
+                  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+                  --data "$client_payload" "$KC_BASE/admin/realms/internal/clients")"
+                test "$status" = 201
+                echo "Created the EspoCRM Keycloak client"
+              else
+                status="$(curl -sS -o /tmp/keycloak-client.json -w '%{http_code}' -X PUT \
+                  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+                  --data "$client_payload" "$KC_BASE/admin/realms/internal/clients/$internal_id")"
+                test "$status" = 204
+                echo "Reconciled the EspoCRM Keycloak client"
+              fi
+              unset ACCESS_TOKEN CLIENT_SECRET client_payload
+          volumeMounts:
+            - name: vault-root-token
+              mountPath: /vault-token
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
