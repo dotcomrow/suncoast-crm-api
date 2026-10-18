@@ -32,6 +32,9 @@ spec:
     deletionPolicy: Retain
     template:
       type: Opaque
+      # Preserve the host and private_key_b64 values fetched through spec.data
+      # while adding the non-secret default SSH account below.
+      mergePolicy: Merge
       data:
         user: ubuntu
   data:
