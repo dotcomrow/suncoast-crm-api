@@ -30,11 +30,13 @@ spec:
     name: espocrm-database-tunnel
     creationPolicy: Owner
     deletionPolicy: Retain
+    template:
+      type: Opaque
+      data:
+        user: ubuntu
   data:
     - secretKey: host
       remoteRef: { key: directus_db_ssh_tunnel_host, property: value }
-    - secretKey: user
-      remoteRef: { key: directus_db_ssh_tunnel_user, property: value }
     - secretKey: private_key_b64
       remoteRef: { key: directus_db_ssh_private_key_b64, property: value }
 ---

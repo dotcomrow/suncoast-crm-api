@@ -68,7 +68,11 @@ spec:
               fi
 
               tunnel_host="$(vault kv get -field=value secret/directus_db_ssh_tunnel_host)"
-              tunnel_user="$(vault kv get -field=value secret/directus_db_ssh_tunnel_user)"
+              # The Directus deployment treats the tunnel user as optional and
+              # falls back to the Oracle image's default SSH account. Keep the
+              # CRM bootstrap compatible with that existing secret layout.
+              tunnel_user="$(vault kv get -field=value secret/directus_db_ssh_tunnel_user 2>/dev/null || true)"
+              tunnel_user="${tunnel_user:-ubuntu}"
               tunnel_key_b64="$(vault kv get -field=value secret/directus_db_ssh_private_key_b64)"
               test -n "$tunnel_host"; test -n "$tunnel_user"; test -n "$tunnel_key_b64"
               umask 077
