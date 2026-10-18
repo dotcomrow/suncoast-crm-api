@@ -50,7 +50,7 @@ test("EspoCRM adapter maps provider-neutral email confirmation fields", async (t
     properties: { ...entity.properties, email_verified: true, email_verified_at: "2026-10-18T15:31:26.758Z" }
   });
   assert.equal(body.cEmailVerified, true);
-  assert.equal(body.cEmailVerifiedAt, "2026-10-18T15:31:26.758Z");
+  assert.equal(body.cEmailVerifiedAt, "2026-10-18 15:31:26");
   assert.equal(body.email_verified, undefined);
 });
 

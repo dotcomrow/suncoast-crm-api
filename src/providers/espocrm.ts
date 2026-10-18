@@ -58,7 +58,14 @@ export class EspoCrmProvider implements CrmProvider {
 
   private properties(type: EntityType, properties: Record<string, unknown>): Record<string, unknown> {
     const aliases = propertyAliases[type] ?? {};
-    const mapped = Object.fromEntries(Object.entries(properties).map(([name, value]) => [aliases[name] ?? name, value]));
+    const mapped = Object.fromEntries(Object.entries(properties).map(([name, value]) => {
+      if (type === "contacts" && name === "email_verified_at" && typeof value === "string") {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) throw new ProviderError("Invalid email verification timestamp", false, 400);
+        return [aliases[name] ?? name, date.toISOString().slice(0, 19).replace("T", " ")];
+      }
+      return [aliases[name] ?? name, value];
+    }));
     if (type === "activities" && !mapped.name) mapped.name = "CRM activity";
     return mapped;
   }
