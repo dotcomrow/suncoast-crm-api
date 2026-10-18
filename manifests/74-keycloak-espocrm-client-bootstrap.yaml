@@ -111,6 +111,64 @@ spec:
                 test "$status" = 204
                 echo "Reconciled the EspoCRM Keycloak client"
               fi
+
+              # GitHub team slugs are emitted dynamically by the Suncoast
+              # membership mapper. Keep matching realm roles for discovery
+              # and emit the membership list in the OIDC tokens/userinfo.
+              for role_name in espocrm_access espocrm_admins; do
+                role_status="$(curl -sS -o /tmp/keycloak-role.json -w '%{http_code}' \
+                  -H "Authorization: Bearer $ACCESS_TOKEN" \
+                  "$KC_BASE/admin/realms/internal/roles/$role_name")"
+                if [ "$role_status" = 404 ]; then
+                  role_payload="$(jq -cn --arg name "$role_name" \
+                    '{name:$name,description:("GitHub team membership for " + $name)}')"
+                  status="$(curl -sS -o /tmp/keycloak-role.json -w '%{http_code}' -X POST \
+                    -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+                    --data "$role_payload" "$KC_BASE/admin/realms/internal/roles")"
+                  test "$status" = 201
+                  echo "Created Keycloak internal realm role $role_name"
+                else
+                  test "$role_status" = 200
+                fi
+              done
+
+              existing="$(curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" \
+                "$KC_BASE/admin/realms/internal/clients?clientId=$CLIENT_ID")"
+              internal_id="$(printf '%s' "$existing" | jq -r '.[0].id // empty')"
+              test -n "$internal_id"
+              mapper_name=suncoast-membership-roles
+              mapper_payload='{
+                "name":"suncoast-membership-roles",
+                "protocol":"openid-connect",
+                "protocolMapper":"suncoast-membership-roles-mapper",
+                "config":{
+                  "claim.name":"suncoast_roles",
+                  "cache.ttl.seconds":"300",
+                  "access.token.claim":"true",
+                  "id.token.claim":"true",
+                  "userinfo.token.claim":"true",
+                  "introspection.token.claim":"true"
+                }
+              }'
+              mappers="$(curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" \
+                "$KC_BASE/admin/realms/internal/clients/$internal_id/protocol-mappers/models")"
+              mapper_id="$(printf '%s' "$mappers" | jq -r --arg name "$mapper_name" \
+                '.[]? | select(.name == $name) | .id' | head -n1)"
+              if [ -z "$mapper_id" ]; then
+                status="$(curl -sS -o /tmp/keycloak-mapper.json -w '%{http_code}' -X POST \
+                  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+                  --data "$mapper_payload" \
+                  "$KC_BASE/admin/realms/internal/clients/$internal_id/protocol-mappers/models")"
+                test "$status" = 201
+                echo "Created the EspoCRM membership-roles claim mapper"
+              else
+                status="$(curl -sS -o /tmp/keycloak-mapper.json -w '%{http_code}' -X PUT \
+                  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+                  --data "$mapper_payload" \
+                  "$KC_BASE/admin/realms/internal/clients/$internal_id/protocol-mappers/models/$mapper_id")"
+                test "$status" = 204
+                echo "Reconciled the EspoCRM membership-roles claim mapper"
+              fi
               unset ACCESS_TOKEN CLIENT_SECRET client_payload
           volumeMounts:
             - name: vault-root-token

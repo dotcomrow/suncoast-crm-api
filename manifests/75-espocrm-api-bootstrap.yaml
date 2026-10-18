@@ -152,6 +152,34 @@ spec:
                 echo "Reconciled the EspoCRM GUI-user role"
               fi
 
+              request GET '/Team?maxSize=200&select=id,name' /tmp/teams.json
+              access_team_name=espocrm_access
+              access_team_id="$(jq -r --arg name "$access_team_name" \
+                '.list[]? | select(.name == $name) | .id' /tmp/teams.json | head -n1)"
+              if [ -z "$access_team_id" ]; then
+                payload="$(jq -cn --arg name "$access_team_name" --arg role "$gui_role_id" \
+                  '{name:$name,rolesIds:[$role]}')"
+                request POST /Team /tmp/access-team.json "$payload"
+                access_team_id="$(jq -r '.id // empty' /tmp/access-team.json)"
+                test -n "$access_team_id"
+                echo "Created the EspoCRM access team"
+              else
+                payload="$(jq -cn --arg role "$gui_role_id" '{rolesIds:[$role]}')"
+                request PUT "/Team/$access_team_id" /tmp/access-team.json "$payload"
+                echo "Reconciled the EspoCRM access team"
+              fi
+
+              admin_team_name=espocrm_admins
+              admin_team_id="$(jq -r --arg name "$admin_team_name" \
+                '.list[]? | select(.name == $name) | .id' /tmp/teams.json | head -n1)"
+              if [ -z "$admin_team_id" ]; then
+                payload="$(jq -cn --arg name "$admin_team_name" '{name:$name}')"
+                request POST /Team /tmp/admin-team.json "$payload"
+                admin_team_id="$(jq -r '.id // empty' /tmp/admin-team.json)"
+                test -n "$admin_team_id"
+                echo "Created the EspoCRM administrator team"
+              fi
+
               user_name="suncoast-crm-api"
               request GET '/User?maxSize=200&select=id,userName,type,isActive,authMethod,rolesIds,apiKey' /tmp/users.json
               user_id="$(jq -r --arg name "$user_name" '.list[]? | select(.userName == $name and .type == "api") | .id' /tmp/users.json | head -n1)"
@@ -185,7 +213,11 @@ spec:
               oidc_payload="$(jq -cn \
                 --arg clientId "$OIDC_CLIENT_ID" \
                 --arg clientSecret "$OIDC_CLIENT_SECRET" \
-                --arg baselineRoleId "$gui_role_id" '{
+                --arg baselineRoleId "$gui_role_id" \
+                --arg accessTeamId "$access_team_id" \
+                --arg adminTeamId "$admin_team_id" \
+                --arg accessTeamName "$access_team_name" \
+                --arg adminTeamName "$admin_team_name" '{
                   siteUrl:"https://espocrm.teleport.app.suncoast.systems",
                   authenticationMethod:"Oidc",
                   oidcClientId:$clientId,
@@ -197,9 +229,16 @@ spec:
                   oidcJwtSignatureAlgorithmList:["RS256"],
                   oidcScopes:["openid","profile","email"],
                   oidcUsernameClaim:"preferred_username",
+                  oidcGroupClaim:"suncoast_roles",
+                  oidcTeamsIds:[$accessTeamId,$adminTeamId],
+                  oidcTeamsNames:{($accessTeamId):$accessTeamName,($adminTeamId):$adminTeamName},
+                  oidcTeamsColumns:{
+                    ($accessTeamId):{group:"espocrm_access"},
+                    ($adminTeamId):{group:"espocrm_admins"}
+                  },
                   oidcCreateUser:true,
                   oidcSync:true,
-                  oidcSyncTeams:false,
+                  oidcSyncTeams:true,
                   oidcAuthorizationPkce:true,
                   oidcAuthorizationPrompt:"consent",
                   oidcFallback:true,

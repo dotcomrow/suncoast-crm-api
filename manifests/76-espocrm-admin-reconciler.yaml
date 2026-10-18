@@ -1,0 +1,102 @@
+# EspoCRM maps OIDC groups to teams but does not map a group to its native
+# administrator user type. Reconcile the espocrm_admins team into that type so
+# GitHub membership remains the source of truth. The recovery admin and all
+# non-regular service identities are deliberately excluded.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: suncoast-crm-espocrm-admin-reconciler
+  namespace: vault
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  schedule: "*/1 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: suncoast-crm-espocrm-admin-reconciler
+          annotations:
+            linkerd.io/inject: "disabled"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: default
+          volumes:
+            - name: vault-root-token
+              secret:
+                secretName: vault-root-token
+          containers:
+            - name: reconcile
+              image: hashicorp/vault:1.15.4
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  apk add --no-cache curl jq >/dev/null
+                  export VAULT_ADDR="http://vault.vault.svc.cluster.local:8200"
+                  if [ -f /vault-token/VAULT_TOKEN ]; then
+                    export VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
+                  elif [ -f /vault-token/token ]; then
+                    export VAULT_TOKEN="$(cat /vault-token/token)"
+                  else
+                    echo "Vault root-token file is unavailable" >&2
+                    exit 1
+                  fi
+
+                  ESPO_BASE="http://espocrm.crm.svc.cluster.local/api/v1"
+                  ADMIN_PASSWORD="$(vault kv get -field=espocrm_admin_password secret/suncoast-crm-api)"
+                  ADMIN_AUTH="$(printf 'admin:%s' "$ADMIN_PASSWORD" | base64 | tr -d '\n')"
+                  unset ADMIN_PASSWORD
+
+                  request() {
+                    method="$1"; path="$2"; output="$3"; payload="${4:-}"
+                    if [ -n "$payload" ]; then
+                      status="$(curl -sS -o "$output" -w '%{http_code}' -X "$method" \
+                        -H "Authorization: Basic $ADMIN_AUTH" -H 'Content-Type: application/json' \
+                        --data "$payload" "$ESPO_BASE$path")"
+                    else
+                      status="$(curl -sS -o "$output" -w '%{http_code}' -X "$method" \
+                        -H "Authorization: Basic $ADMIN_AUTH" "$ESPO_BASE$path")"
+                    fi
+                    case "$status" in
+                      2??) ;;
+                      *) echo "EspoCRM $method $path failed with HTTP $status" >&2; cat "$output" >&2; exit 1 ;;
+                    esac
+                  }
+
+                  request GET '/Team?maxSize=200&select=id,name' /tmp/teams.json
+                  admin_team_id="$(jq -r '.list[]? | select(.name == "espocrm_admins") | .id' \
+                    /tmp/teams.json | head -n1)"
+                  test -n "$admin_team_id"
+
+                  request GET '/User?maxSize=200&select=id,userName,type,isActive,teamsIds' /tmp/users.json
+                  jq -c '.list[]? | select(.isActive == true and (.type == "regular" or .type == "admin") and .userName != "admin")' \
+                    /tmp/users.json | while IFS= read -r user; do
+                    user_id="$(printf '%s' "$user" | jq -r '.id')"
+                    user_name="$(printf '%s' "$user" | jq -r '.userName')"
+                    user_type="$(printf '%s' "$user" | jq -r '.type')"
+                    if printf '%s' "$user" | jq -e --arg id "$admin_team_id" \
+                      '(.teamsIds // []) | index($id) != null' >/dev/null; then
+                      desired_type=admin
+                    else
+                      desired_type=regular
+                    fi
+                    if [ "$user_type" != "$desired_type" ]; then
+                      payload="$(jq -cn --arg type "$desired_type" '{type:$type}')"
+                      request PUT "/User/$user_id" "/tmp/user-$user_id.json" "$payload"
+                      echo "Set EspoCRM user $user_name type to $desired_type"
+                    fi
+                  done
+                  unset ADMIN_AUTH
+              volumeMounts:
+                - name: vault-root-token
+                  mountPath: /vault-token
+                  readOnly: true
+              securityContext:
+                allowPrivilegeEscalation: false
