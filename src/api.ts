@@ -8,7 +8,7 @@ import { openApiSpec } from "./openapi.js";
 import { runOutbox, stopOutbox } from "./outbox.js";
 import { getEntity, getOperation, listEntities, queueOperation } from "./repository.js";
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
-import { aiBody, entityBody, updateBody } from "./validation.js";
+import { aiBody, entityBody, externalContactSignupBody, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
 import { createEmailVerification, emailVerificationBody, getEmailVerification } from "./email-verifications.js";
 
@@ -29,6 +29,16 @@ app.get("/openapi.json", (_req, res) => res.json(openApiSpec()));
 app.get("/v1/operations/:operationId", async (req, res) => { const value = await getOperation(tenant(), req.params.operationId!); value ? res.json(value) : res.status(404).json({ error: "Operation not found" }); });
 app.post("/v1/email-verifications", async (req, res) => { const h = headers(req); const body = emailVerificationBody.parse(req.body); const value = await createEmailVerification(body.email, body.purpose, h.idempotencyKey); res.status(value.duplicate ? 200 : 202).json(value); });
 app.get("/v1/email-verifications/:verificationId", async (req, res) => { const value = await getEmailVerification(req.params.verificationId!); value ? res.json(value) : res.status(404).json({ error: "Email verification not found" }); });
+app.post("/v1/external-signups/contacts", async (req, res) => {
+  const h = headers(req);
+  const body = externalContactSignupBody.parse(req.body);
+  const rawEmail = body.properties.email ?? body.properties.emailAddress;
+  const email = emailVerificationBody.shape.email.parse(rawEmail);
+  const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`);
+  const entityId = randomUUID();
+  const result = await queueOperation({ ...h, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties: body.properties, associations: body.associations } });
+  res.status(202).json({ ...queuedResponse(result), entity_id: result.entityId, email_verification: verification });
+});
 app.get("/v1/custom-objects", async (_req, res) => res.json(await listCustomObjectDefinitions(tenant())));
 app.get("/v1/custom-objects/:objectName", async (req, res) => { const value = await getCustomObjectDefinition(tenant(), req.params.objectName!); value ? res.json(value) : res.status(404).json({ error: "Custom object not found" }); });
 app.get("/v1/custom-objects/:objectName/records", async (req, res) => { const definition = await getCustomObjectDefinition(tenant(), req.params.objectName!); if (!definition) return res.status(404).json({ error: "Custom object not found" }); const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25)); return res.json(await listCustomRecords(tenant(), definition.name, limit, typeof req.query.cursor === "string" ? req.query.cursor : undefined, typeof req.query.contact_id === "string" ? req.query.contact_id : undefined)); });

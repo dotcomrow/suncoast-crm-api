@@ -12,7 +12,7 @@ const entityNames: Record<EntityType, string> = {
 };
 
 const propertyAliases: Partial<Record<EntityType, Record<string, string>>> = {
-  contacts: { firstname: "firstName", lastname: "lastName" },
+  contacts: { firstname: "firstName", lastname: "lastName", email: "emailAddress" },
   companies: { domain: "website" },
   deals: { dealname: "name", dealstage: "stage", closedate: "closeDate" },
   activities: { subject: "name", hs_note_body: "description" }

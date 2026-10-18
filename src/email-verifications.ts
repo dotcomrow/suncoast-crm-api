@@ -9,7 +9,7 @@ export const emailVerificationBody = z.object({
 });
 
 function response(row: Record<string, unknown>) {
-  return { id: row.id, email: row.email, purpose: row.purpose, status: row.status, expires_at: row.expires_at, verified_at: row.verified_at, created_at: row.created_at };
+  return { id: row.id, validation_id: row.id, email: row.email, purpose: row.purpose, status: row.status, expires_at: row.expires_at, verified_at: row.verified_at, created_at: row.created_at };
 }
 
 async function queueConfirmationEmail(email: string, url: string, id: string): Promise<void> {
@@ -37,6 +37,7 @@ async function queueConfirmationEmail(email: string, url: string, id: string): P
 
 export async function createEmailVerification(email: string, purpose: string, idempotencyKey: string) {
   const cfg = config();
+  if (!cfg.EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED) throw Object.assign(new Error("External signup email verification is disabled"), { status: 503 });
   const code = randomBytes(32).toString("base64url");
   const tokenHash = createHash("sha256").update(code).digest("hex");
   const id = randomUUID();

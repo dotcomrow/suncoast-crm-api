@@ -21,7 +21,7 @@ test("EspoCRM adapter searches by the replay key before creating a contact", asy
   assert.equal(search.pathname, "/api/v1/Contact");
   assert.deepEqual(JSON.parse(String(search.searchParams.get("where"))), [{ type: "equals", attribute: "cSuncoastCrmId", value: "local-1" }]);
   assert.equal(requests[1].init?.method, "POST");
-  assert.deepEqual(JSON.parse(String(requests[1].init?.body)), { firstName: "Pat", lastName: "Lee", email: "pat@example.com", cSuncoastCrmId: "local-1" });
+  assert.deepEqual(JSON.parse(String(requests[1].init?.body)), { firstName: "Pat", lastName: "Lee", emailAddress: "pat@example.com", cSuncoastCrmId: "local-1" });
   assert.equal((requests[1].init?.headers as Record<string, string>)["X-Api-Key"], "key");
   assert.equal(result.providerId, "espo-1");
 });

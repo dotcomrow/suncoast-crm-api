@@ -8,6 +8,7 @@ data:
   EMAIL_CONFIRMATION_PORT: "8082"
   EMAIL_CONFIRMATION_PUBLIC_URL: "https://login.suncoast.systems/crm-email-confirmation/confirm-email"
   EMAIL_VERIFICATION_TTL_HOURS: "24"
+  EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED: "true"
   DATABASE_SSL: "false"
   CRM_TENANT_ID: "suncoast"
   CRM_PROVIDER: "espocrm"
