@@ -9,7 +9,7 @@ export const emailVerificationBody = z.object({
 });
 
 function response(row: Record<string, unknown>) {
-  return { id: row.id, validation_id: row.id, email: row.email, purpose: row.purpose, status: row.status, expires_at: row.expires_at, verified_at: row.verified_at, created_at: row.created_at };
+  return { id: row.id, validation_id: row.id, entity_id: row.entity_id ?? null, email: row.email, purpose: row.purpose, status: row.status, expires_at: row.expires_at, verified_at: row.verified_at, created_at: row.created_at };
 }
 
 async function queueConfirmationEmail(email: string, url: string, id: string): Promise<void> {
@@ -35,7 +35,7 @@ async function queueConfirmationEmail(email: string, url: string, id: string): P
   if (!result.ok) throw Object.assign(new Error(`Notification service rejected confirmation email with HTTP ${result.status}`), { status: 502 });
 }
 
-export async function createEmailVerification(email: string, purpose: string, idempotencyKey: string) {
+export async function createEmailVerification(email: string, purpose: string, idempotencyKey: string, entityId?: string) {
   const cfg = config();
   if (!cfg.EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED) throw Object.assign(new Error("External signup email verification is disabled"), { status: 503 });
   const code = randomBytes(32).toString("base64url");
@@ -43,10 +43,10 @@ export async function createEmailVerification(email: string, purpose: string, id
   const id = randomUUID();
   return inTransaction(async (client) => {
     const inserted = await client.query(
-      `INSERT INTO crm_email_verifications (id,tenant_id,email,purpose,idempotency_key,token_hash,expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,now() + make_interval(hours => $7))
+      `INSERT INTO crm_email_verifications (id,tenant_id,email,purpose,idempotency_key,token_hash,expires_at,entity_id)
+       VALUES ($1,$2,$3,$4,$5,$6,now() + make_interval(hours => $7),$8)
        ON CONFLICT (tenant_id,idempotency_key) DO NOTHING RETURNING *`,
-      [id, cfg.CRM_TENANT_ID, email, purpose, idempotencyKey, tokenHash, cfg.EMAIL_VERIFICATION_TTL_HOURS]
+      [id, cfg.CRM_TENANT_ID, email, purpose, idempotencyKey, tokenHash, cfg.EMAIL_VERIFICATION_TTL_HOURS, entityId ?? null]
     );
     if (!inserted.rowCount) {
       const existing = await client.query("SELECT * FROM crm_email_verifications WHERE tenant_id=$1 AND idempotency_key=$2", [cfg.CRM_TENANT_ID, idempotencyKey]);

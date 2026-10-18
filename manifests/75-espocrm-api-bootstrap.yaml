@@ -98,6 +98,44 @@ spec:
                 fi
               done
 
+              # External signup confirmation state is stored on Contact so it
+              # is visible to CRM users and survives facade cache rebuilds.
+              for field_spec in 'emailVerified|Email Verified|bool' 'emailVerifiedAt|Email Verified At|datetime'; do
+                field_name="${field_spec%%|*}"
+                field_tail="${field_spec#*|}"
+                field_label="${field_tail%%|*}"
+                field_type="${field_tail##*|}"
+                metadata_name="c$(printf '%s' "$field_name" | cut -c1 | tr '[:lower:]' '[:upper:]')$(printf '%s' "$field_name" | cut -c2-)"
+                existing_type="$(jq -r --arg name "$metadata_name" '.entityDefs.Contact.fields[$name].type // empty' /tmp/metadata.json)"
+                if [ -z "$existing_type" ]; then
+                  field_payload="$(jq -cn --arg name "$field_name" --arg label "$field_label" --arg type "$field_type" \
+                    '{name:$name,label:$label,type:$type,required:false,audited:true}')"
+                  request POST /Admin/fieldManager/Contact "/tmp/field-Contact-$field_name.json" "$field_payload"
+                  test "$(jq -r '.type // empty' "/tmp/field-Contact-$field_name.json")" = "$field_type"
+                  echo "Created Contact.$metadata_name"
+                elif [ "$existing_type" != "$field_type" ]; then
+                  echo "Contact.$metadata_name has unexpected type $existing_type" >&2
+                  exit 1
+                else
+                  echo "Preserving Contact.$metadata_name"
+                fi
+              done
+
+              request GET /Contact/layout/detail /tmp/contact-detail-layout.json
+              detail_layout="$(jq -c '
+                if ([.. | objects | select(.name? == "cEmailVerified")] | length) > 0 then .
+                else .[0].rows += [[{"name":"cEmailVerified"},{"name":"cEmailVerifiedAt"}]] end
+              ' /tmp/contact-detail-layout.json)"
+              request PUT /Contact/layout/detail /tmp/contact-detail-layout-updated.json "$detail_layout"
+
+              request GET /Contact/layout/list /tmp/contact-list-layout.json
+              list_layout="$(jq -c '
+                if ([.[] | select(.name? == "cEmailVerified")] | length) > 0 then .
+                else . + [{"name":"cEmailVerified"}] end
+              ' /tmp/contact-list-layout.json)"
+              request PUT /Contact/layout/list /tmp/contact-list-layout-updated.json "$list_layout"
+              echo "Reconciled Contact email-confirmation layouts"
+
               role_name="Suncoast CRM API"
               request GET '/Role?maxSize=200&select=id,name' /tmp/roles.json
               role_id="$(jq -r --arg name "$role_name" '.list[]? | select(.name == $name) | .id' /tmp/roles.json | head -n1)"

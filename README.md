@@ -18,6 +18,12 @@ for internal integrations and does not send email automatically.
 The deployment manifest enables this external-only workflow with
 `EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED=true`.
 
+Successful confirmation updates the associated Contact with the provider-neutral
+`email_verified` and `email_verified_at` properties. The EspoCRM adapter maps
+these to the deployment-managed `cEmailVerified` and `cEmailVerifiedAt` fields;
+the bootstrap job also places both fields on the Contact detail layout and the
+boolean indicator on the Contact list layout.
+
 ## EspoCRM provider
 
 The adapter maps the stable entity families as follows:

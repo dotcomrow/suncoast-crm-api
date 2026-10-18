@@ -14,6 +14,7 @@ test("generated OpenAPI exposes the stable CRM and operation paths", async () =>
   assert.ok(spec.paths["/v1/operations/{operationId}"]);
   assert.ok(spec.paths["/v1/custom-objects"]);
   assert.ok(spec.paths["/v1/custom-objects/{objectName}/records"]);
+  assert.ok(spec.components.schemas.EmailVerification.properties.entity_id);
   assert.ok(spec.paths["/v1/custom-objects/{objectName}/records/{recordId}"]);
   assert.equal(spec.paths["/v1/email-verifications"].post.operationId, "requestExternalEmailVerification");
   assert.equal(spec.paths["/v1/email-verifications/{verificationId}"].get.operationId, "getExternalEmailVerification");

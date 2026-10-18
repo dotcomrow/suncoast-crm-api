@@ -34,9 +34,9 @@ app.post("/v1/external-signups/contacts", async (req, res) => {
   const body = externalContactSignupBody.parse(req.body);
   const rawEmail = body.properties.email ?? body.properties.emailAddress;
   const email = emailVerificationBody.shape.email.parse(rawEmail);
-  const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`);
   const entityId = randomUUID();
-  const result = await queueOperation({ ...h, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties: body.properties, associations: body.associations } });
+  const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, entityId);
+  const result = await queueOperation({ ...h, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId: String(verification.entity_id ?? entityId), payload: { properties: body.properties, associations: body.associations } });
   res.status(202).json({ ...queuedResponse(result), entity_id: result.entityId, email_verification: verification });
 });
 app.get("/v1/custom-objects", async (_req, res) => res.json(await listCustomObjectDefinitions(tenant())));

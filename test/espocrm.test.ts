@@ -38,6 +38,22 @@ test("EspoCRM adapter updates the existing record on a replay", async (t) => {
   assert.equal(result.providerId, "espo-existing");
 });
 
+test("EspoCRM adapter maps provider-neutral email confirmation fields", async (t) => {
+  let body: Record<string, unknown> = {};
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ id: "espo-1", ...body }), { status: 200 });
+  });
+  await new EspoCrmProvider("key", "https://crm.example.test", "cSuncoastCrmId").update("contacts", "espo-1", {
+    ...entity,
+    providerId: "espo-1",
+    properties: { ...entity.properties, email_verified: true, email_verified_at: "2026-10-18T15:31:26.758Z" }
+  });
+  assert.equal(body.cEmailVerified, true);
+  assert.equal(body.cEmailVerifiedAt, "2026-10-18T15:31:26.758Z");
+  assert.equal(body.email_verified, undefined);
+});
+
 test("EspoCRM adapter maps offset pagination to the stable cursor", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ list: [{ id: "1" }, { id: "2" }], total: 5 }), { status: 200 }));
   const page = await new EspoCrmProvider("key", "https://crm.example.test", "cSuncoastCrmId").list("companies", { cursor: "2", limit: 2 });
