@@ -1,0 +1,222 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: espocrm-runtime
+  namespace: crm
+  annotations: { argocd.argoproj.io/sync-wave: "2" }
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: crm-vault }
+  target:
+    name: espocrm-runtime
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: ESPOCRM_DATABASE_PASSWORD
+      remoteRef: { key: suncoast-crm-api, property: espocrm_database_password }
+    - secretKey: ESPOCRM_ADMIN_PASSWORD
+      remoteRef: { key: suncoast-crm-api, property: espocrm_admin_password }
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: espocrm-database-tunnel
+  namespace: crm
+  annotations: { argocd.argoproj.io/sync-wave: "2" }
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: crm-vault }
+  target:
+    name: espocrm-database-tunnel
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: host
+      remoteRef: { key: directus_db_ssh_tunnel_host, property: value }
+    - secretKey: user
+      remoteRef: { key: directus_db_ssh_tunnel_user, property: value }
+    - secretKey: private_key_b64
+      remoteRef: { key: directus_db_ssh_private_key_b64, property: value }
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: suncoast-crm-database
+  namespace: crm
+  annotations: { argocd.argoproj.io/sync-wave: "2" }
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { kind: SecretStore, name: crm-vault }
+  target:
+    name: suncoast-crm-database
+    # The existing Secret was created by the former credential-sync job. Orphan
+    # permits a safe in-place takeover and also supports clean-room creation.
+    creationPolicy: Orphan
+    deletionPolicy: Retain
+    template:
+      type: Opaque
+      data:
+        DATABASE_URL: "postgresql://suncoast_crm_app:{{ .password }}@suncoast-crm-postgres.crm.svc.cluster.local:5432/suncoast_crm?options=-csearch_path%3Dcrm"
+  data:
+    - secretKey: password
+      remoteRef: { key: suncoast-crm-api, property: facade_database_password }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: suncoast-crm-postgres
+  namespace: crm
+  annotations: { argocd.argoproj.io/sync-wave: "2" }
+spec:
+  selector: { app.kubernetes.io/name: suncoast-crm-postgres-tunnel }
+  ports: [{ name: postgres, port: 5432, targetPort: postgres }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suncoast-crm-postgres-tunnel
+  namespace: crm
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: suncoast-crm-postgres-tunnel } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: suncoast-crm-postgres-tunnel }
+      annotations: { linkerd.io/inject: "disabled" }
+    spec:
+      containers:
+        - name: tunnel
+          image: alpine:3.20
+          command: ["sh", "-ec"]
+          args:
+            - |
+              apk add --no-cache openssh-client >/dev/null
+              printf '%s' "$PRIVATE_KEY_B64" | base64 -d > /tmp/db-key
+              chmod 600 /tmp/db-key
+              exec ssh -NT -i /tmp/db-key -o IdentitiesOnly=yes -o BatchMode=yes \
+                -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+                -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known-hosts \
+                -L 0.0.0.0:5432:127.0.0.1:5432 "$TUNNEL_USER@$TUNNEL_HOST"
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: TUNNEL_HOST, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: host } } }
+            - { name: TUNNEL_USER, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: user } } }
+            - { name: PRIVATE_KEY_B64, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: private_key_b64 } } }
+          readinessProbe: { tcpSocket: { port: postgres }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe: { tcpSocket: { port: postgres }, periodSeconds: 30, timeoutSeconds: 3 }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: espocrm-data
+  namespace: crm
+  annotations: { argocd.argoproj.io/sync-wave: "2" }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources: { requests: { storage: 10Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: espocrm
+  namespace: crm
+  labels: { app.kubernetes.io/name: espocrm }
+spec:
+  selector: { app.kubernetes.io/name: espocrm }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: espocrm
+  namespace: crm
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    reloader.stakater.com/auto: "true"
+spec:
+  serviceName: espocrm
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: espocrm } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: espocrm, app.kubernetes.io/part-of: espocrm }
+      annotations: { linkerd.io/inject: "enabled" }
+    spec:
+      securityContext: { fsGroup: 33, seccompProfile: { type: RuntimeDefault } }
+      initContainers:
+        - name: prepare-persistent-directories
+          image: busybox:1.37
+          command: ["sh", "-c", "mkdir -p /espocrm/custom /espocrm/client-custom"]
+          volumeMounts: [{ name: espocrm-data, mountPath: /espocrm }]
+          securityContext: { allowPrivilegeEscalation: false }
+      containers:
+        - name: database-tunnel
+          image: alpine:3.20
+          command: ["sh", "-ec"]
+          args:
+            - |
+              apk add --no-cache openssh-client >/dev/null
+              printf '%s' "$PRIVATE_KEY_B64" | base64 -d > /tmp/db-key
+              chmod 600 /tmp/db-key
+              exec ssh -NT -i /tmp/db-key -o IdentitiesOnly=yes -o BatchMode=yes \
+                -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+                -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known-hosts \
+                -L 127.0.0.1:15433:127.0.0.1:5432 "$TUNNEL_USER@$TUNNEL_HOST"
+          env:
+            - { name: TUNNEL_HOST, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: host } } }
+            - { name: TUNNEL_USER, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: user } } }
+            - { name: PRIVATE_KEY_B64, valueFrom: { secretKeyRef: { name: espocrm-database-tunnel, key: private_key_b64 } } }
+          readinessProbe: { tcpSocket: { port: 15433 }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe: { tcpSocket: { port: 15433 }, periodSeconds: 30, timeoutSeconds: 3 }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext: { allowPrivilegeEscalation: false }
+        - name: web
+          image: espocrm/espocrm:10.0.10
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 80 }]
+          env:
+            - { name: ESPOCRM_DATABASE_PLATFORM, value: Postgresql }
+            - { name: ESPOCRM_DATABASE_HOST, value: 127.0.0.1 }
+            - { name: ESPOCRM_DATABASE_PORT, value: "15433" }
+            - { name: ESPOCRM_DATABASE_NAME, value: espocrm }
+            - { name: ESPOCRM_DATABASE_USER, value: espocrm_app }
+            - { name: ESPOCRM_ADMIN_USERNAME, value: admin }
+            - { name: ESPOCRM_SITE_URL, value: "http://espocrm.crm.svc.cluster.local" }
+            - { name: ESPOCRM_DATABASE_PASSWORD, valueFrom: { secretKeyRef: { name: espocrm-runtime, key: ESPOCRM_DATABASE_PASSWORD } } }
+            - { name: ESPOCRM_ADMIN_PASSWORD, valueFrom: { secretKeyRef: { name: espocrm-runtime, key: ESPOCRM_ADMIN_PASSWORD } } }
+          volumeMounts:
+            - { name: espocrm-data, mountPath: /var/www/html/data }
+            - { name: espocrm-data, mountPath: /var/www/html/custom, subPath: custom }
+            - { name: espocrm-data, mountPath: /var/www/html/client/custom, subPath: client-custom }
+          startupProbe: { exec: { command: ["bin/command", "app-check"] }, periodSeconds: 10, failureThreshold: 60 }
+          readinessProbe: { exec: { command: ["bin/command", "app-check"] }, periodSeconds: 30, timeoutSeconds: 20 }
+          livenessProbe: { exec: { command: ["bin/command", "app-check"] }, periodSeconds: 60, timeoutSeconds: 20 }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          securityContext: { allowPrivilegeEscalation: false }
+        - name: daemon
+          image: espocrm/espocrm:10.0.10
+          imagePullPolicy: IfNotPresent
+          command: ["docker-daemon.sh"]
+          volumeMounts:
+            - { name: espocrm-data, mountPath: /var/www/html/data }
+            - { name: espocrm-data, mountPath: /var/www/html/custom, subPath: custom }
+            - { name: espocrm-data, mountPath: /var/www/html/client/custom, subPath: client-custom }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          securityContext: { allowPrivilegeEscalation: false }
+      volumes:
+        - name: espocrm-data
+          persistentVolumeClaim: { claimName: espocrm-data }

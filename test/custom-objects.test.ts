@@ -29,7 +29,7 @@ test("custom properties are validated from a registered definition", async () =>
   });
   assert.equal(input.storage_mode, "local");
   assert.equal(input.cardinality, "many_per_contact");
-  const definition = { ...input, id: "definition-1", provider: "hubspot", provider_object_type: "2-123", provider_schema: {}, created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString() };
+  const definition = { ...input, id: "definition-1", provider: "espocrm", provider_object_type: "local:preferences", provider_schema: {}, created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString() };
   assert.doesNotThrow(() => validateCustomProperties(definition, { email: "person@example.com", status: "subscribed" }));
   assert.throws(() => validateCustomProperties(definition, { status: "invalid" }), /email.*required/);
   assert.throws(() => validateCustomProperties(definition, { email: "person@example.com", unexpected: true }), /Unknown property/);

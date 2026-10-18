@@ -30,6 +30,7 @@ spec:
           envFrom:
             - configMapRef: { name: suncoast-crm-api }
             - secretRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-espocrm-provider }
             - secretRef: { name: suncoast-crm-database }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
           startupProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5, failureThreshold: 24 }
@@ -63,6 +64,7 @@ spec:
           envFrom:
             - configMapRef: { name: suncoast-crm-api }
             - secretRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-espocrm-provider }
             - secretRef: { name: suncoast-crm-database }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
           startupProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 5, failureThreshold: 24 }

@@ -4,6 +4,7 @@ import type pg from "pg";
 import { config } from "./config.js";
 import { inTransaction, pool } from "./db.js";
 import type { CommandAction, CrmCommand, EntityType } from "./types.js";
+import { cacheGet, cacheSet, entityCacheKey } from "./cache.js";
 
 export interface QueueInput {
   tenantId: string; provider: string; action: CommandAction; entityType?: string; entityId?: string;
@@ -66,8 +67,13 @@ export async function getOperation(tenantId: string, id: string) {
   return result.rows[0] ? operationResponse(result.rows[0]) : null;
 }
 export async function getEntity(tenantId: string, type: EntityType, id: string) {
+  const key = entityCacheKey(tenantId, type, id);
+  const cached = await cacheGet<ReturnType<typeof entityResponse>>(key);
+  if (cached) return cached;
   const result = await pool.query("SELECT * FROM crm_entities WHERE tenant_id=$1 AND entity_type=$2 AND id=$3 AND deleted_at IS NULL", [tenantId, type, id]);
-  return result.rows[0] ? entityResponse(result.rows[0]) : null;
+  const value = result.rows[0] ? entityResponse(result.rows[0]) : null;
+  if (value) await cacheSet(key, value);
+  return value;
 }
 export async function listEntities(tenantId: string, type: EntityType, limit: number, cursor?: string) {
   const params: unknown[] = [tenantId, type, limit + 1];

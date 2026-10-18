@@ -23,3 +23,17 @@ spec:
       ports:
         # Allow Linkerd Viz Prometheus to scrape the proxy admin metrics endpoint.
         - { protocol: TCP, port: 4191 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: suncoast-crm-postgres-tunnel
+  namespace: crm
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: suncoast-crm-postgres-tunnel } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 5432 }

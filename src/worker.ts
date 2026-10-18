@@ -3,7 +3,6 @@ import { createServer } from "node:http";
 import { config } from "./config.js";
 import { inTransaction, pool } from "./db.js";
 import { kafka, producer } from "./kafka.js";
-import { enqueueFailureNotification, runNotificationOutbox } from "./notifications.js";
 import { summarize } from "./ollama.js";
 import { providerFor } from "./providers/registry.js";
 import { ProviderError } from "./providers/provider.js";
@@ -11,6 +10,7 @@ import { commandTopics, retryScheduleForAttempt } from "./retry.js";
 import { getCustomObjectDefinition, getCustomRecord, persistCustomRecord } from "./custom-objects.js";
 import type { CrmCommand, CrmEntity } from "./types.js";
 import { commandSchema } from "./validation.js";
+import { cacheDelete, entityCacheKey } from "./cache.js";
 
 let kafkaReady = false;
 let shuttingDown = false;
@@ -49,19 +49,6 @@ export async function processCommand(command: CrmCommand): Promise<void> {
       const entityResult = await pool.query("SELECT properties, associations FROM crm_entities WHERE tenant_id=$1 AND entity_type=$2 AND id=$3 AND deleted_at IS NULL", [command.tenantId, command.entityType, command.entityId]);
       if (!entityResult.rowCount) throw new ProviderError("Entity not found", false, 404);
       result = await summarize(entityResult.rows[0]);
-    } else if (command.action === "form.submit") {
-      const provider = providerFor(command.provider);
-      if (!provider.submitForm) throw new ProviderError(`Provider ${provider.name} does not support forms`, false, 501);
-      const fields = command.payload.fields as Record<string, string>;
-      const contextInput = command.payload.context as { page_uri?: string; page_name?: string; hutk?: string } | undefined;
-      const consentInput = command.payload.consent as { consent_to_process: true; text: string; communications: Array<{ value: true; subscription_type_id: number; text: string }> } | undefined;
-      const response = await provider.submitForm(String(command.payload.portal_id), String(command.payload.form_id), {
-        fields,
-        context: contextInput ? { pageUri: contextInput.page_uri, pageName: contextInput.page_name, hutk: contextInput.hutk } : undefined,
-        consent: consentInput ? { consentToProcess: true, text: consentInput.text, communications: consentInput.communications.map((item) => ({ value: true, subscriptionTypeId: item.subscription_type_id, text: item.text })) } : undefined
-      });
-      await pool.query("UPDATE crm_form_submissions SET status='submitted',provider_response=$2,error=NULL,submitted_at=now(),updated_at=now() WHERE id=$1", [command.entityId, response]);
-      result = { submissionId: command.entityId, formName: command.entityType, providerResponse: response };
     } else if (command.action.startsWith("custom.")) {
       const definition = await getCustomObjectDefinition(command.tenantId, command.entityType!);
       if (!definition) throw new ProviderError("Custom object definition not found", false, 404);
@@ -144,6 +131,7 @@ export async function processCommand(command: CrmCommand): Promise<void> {
           result = { deleted: true };
         }
       }
+      await cacheDelete(entityCacheKey(command.tenantId, standardType, entity.id));
     }
     await inTransaction(async (client) => {
       await client.query("UPDATE crm_operations SET status='succeeded', result=$2, finished_at=now(), error=NULL WHERE id=$1", [command.operationId, result]);
@@ -156,28 +144,20 @@ export async function processCommand(command: CrmCommand): Promise<void> {
       const retry = retryScheduleForAttempt(attempts);
       await inTransaction(async (client) => {
         await client.query("UPDATE crm_operations SET status='retrying',error=$2,started_at=NULL,finished_at=NULL WHERE id=$1", [command.operationId, String(error)]);
-        if (command.action === "form.submit") await client.query("UPDATE crm_form_submissions SET status='retrying',error=$2,updated_at=now() WHERE id=$1", [command.entityId, String(error)]);
         await client.query(
           `INSERT INTO crm_outbox (id,aggregate_id,topic,message_key,payload,available_at)
            VALUES ($1,$2,$3,$4,$5,now() + make_interval(secs => $6))`,
           [randomUUID(), command.operationId, retry.topic, command.tenantId, command, retry.delaySeconds]
         );
-        if (attempts === 1 && command.provider === "hubspot" && command.action !== "ai.summarize") {
-          await enqueueFailureNotification(client, command, error, attempts, "retrying");
-        }
       });
       return;
     }
     await inTransaction(async (client) => {
       await client.query("UPDATE crm_operations SET status='failed',error=$2,finished_at=now() WHERE id=$1", [command.operationId, String(error)]);
-      if (command.action === "form.submit") await client.query("UPDATE crm_form_submissions SET status='failed',error=$2,updated_at=now() WHERE id=$1", [command.entityId, String(error)]);
       await client.query("INSERT INTO crm_outbox (id,aggregate_id,topic,message_key,payload) VALUES ($1,$2,$3,$4,$5)", [
         randomUUID(), command.operationId, config().KAFKA_DLQ_TOPIC, command.tenantId,
         { ...command, failure: String(error), failedAt: new Date().toISOString() }
       ]);
-      if (command.provider === "hubspot" && command.action !== "ai.summarize") {
-        await enqueueFailureNotification(client, command, error, attempts, "failed");
-      }
     });
   }
 }
@@ -197,8 +177,8 @@ const healthServer = createServer(async (request, response) => {
   }
   if (request.url === "/readyz") {
     try {
-      const schema = await pool.query("SELECT to_regclass('crm.crm_operations') AS operations, to_regclass('crm.crm_custom_object_records') AS custom_records, to_regclass('crm.crm_form_submissions') AS form_submissions, to_regclass('crm.crm_email_validations') AS email_validations, to_regclass('crm.crm_email_validation_action_registry') AS action_registry");
-      const ready = kafkaReady && Boolean(schema.rows[0]?.operations) && Boolean(schema.rows[0]?.custom_records) && Boolean(schema.rows[0]?.form_submissions) && Boolean(schema.rows[0]?.email_validations) && Boolean(schema.rows[0]?.action_registry) && !shuttingDown;
+      const schema = await pool.query("SELECT to_regclass('crm.crm_operations') AS operations, to_regclass('crm.crm_custom_object_records') AS custom_records");
+      const ready = kafkaReady && Boolean(schema.rows[0]?.operations) && Boolean(schema.rows[0]?.custom_records) && !shuttingDown;
       response.writeHead(ready ? 200 : 503).end(ready ? "ready" : "not ready");
     } catch {
       response.writeHead(503).end("not ready");
@@ -224,7 +204,6 @@ async function shutdown(): Promise<void> {
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void shutdown());
 
 await recoverExpiredClaims();
-void runNotificationOutbox(() => shuttingDown);
 while (!shuttingDown) {
   try {
     await consumer.connect();

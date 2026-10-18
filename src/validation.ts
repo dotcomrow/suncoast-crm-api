@@ -17,7 +17,7 @@ export const commandSchema = z.object({
   operationId: z.string().uuid(),
   tenantId: z.string().min(1),
   provider: z.string().min(1),
-  action: z.enum(["create", "update", "delete", "ai.summarize", "custom.create", "custom.update", "custom.delete", "form.submit"]),
+  action: z.enum(["create", "update", "delete", "ai.summarize", "custom.create", "custom.update", "custom.delete"]),
   entityType: z.string().min(1).optional(),
   entityId: z.string().uuid().optional(),
   payload: z.record(z.string(), z.unknown()),

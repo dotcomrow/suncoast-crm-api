@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Provider-neutral CRM API with durable Kafka delivery",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/api.ts",
@@ -17,6 +19,7 @@
   "dependencies": {
     "express": "^5.2.1",
     "helmet": "^8.1.0",
+    "ioredis": "^5.11.1",
     "kafkajs": "^2.2.4",
     "pg": "^8.16.3",
     "zod": "^4.1.13"

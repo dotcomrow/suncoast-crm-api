@@ -1,6 +1,6 @@
 export const entityTypes = ["contacts", "companies", "deals", "activities"] as const;
 export type EntityType = typeof entityTypes[number];
-export type CommandAction = "create" | "update" | "delete" | "ai.summarize" | "custom.create" | "custom.update" | "custom.delete" | "form.submit";
+export type CommandAction = "create" | "update" | "delete" | "ai.summarize" | "custom.create" | "custom.update" | "custom.delete";
 
 export interface CrmEntity {
   id: string;

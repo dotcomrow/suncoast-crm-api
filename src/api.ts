@@ -10,9 +10,6 @@ import { getEntity, getOperation, listEntities, queueOperation } from "./reposit
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
 import { aiBody, entityBody, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
-import { configuredForm, formSubmissionBody, getFormSubmission, queueFormSubmission } from "./forms.js";
-import { emailValidationBody, emailValidationUrl, getEmailValidation, queueEmailValidation } from "./email-validations.js";
-import { actionConfigBody, completeEmailValidationTerminal, getUserActionConfig, putUserActionConfig, terminalOutcomeBody } from "./email-validation-rules.js";
 
 const app = express();
 app.disable("x-powered-by"); app.use(helmet()); app.use(express.json({ limit: "1mb" }));
@@ -26,30 +23,9 @@ const tenant = () => config().CRM_TENANT_ID;
 const queuedResponse = (result: { id: string; status: string; duplicate: boolean }) => ({ operation_id: result.id, status: result.status, duplicate: result.duplicate, status_url: `${config().OPENAPI_SERVER_URL.replace(/\/$/, "")}/v1/operations/${result.id}` });
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records, to_regclass('crm_form_submissions') AS form_submissions, to_regclass('crm_email_validations') AS email_validations, to_regclass('crm_email_validation_action_registry') AS action_registry, to_regclass('crm_email_validation_action_defaults') AS action_defaults, to_regclass('crm_email_validation_user_actions') AS user_actions"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records || !row?.form_submissions || !row?.email_validations || !row?.action_registry || !row?.action_defaults || !row?.user_actions) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
+app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
 app.get("/openapi.json", (_req, res) => res.json(openApiSpec()));
 app.get("/v1/operations/:operationId", async (req, res) => { const value = await getOperation(tenant(), req.params.operationId!); value ? res.json(value) : res.status(404).json({ error: "Operation not found" }); });
-app.get("/v1/form-submissions/:submissionId", async (req, res) => { const value = await getFormSubmission(tenant(), req.params.submissionId!); value ? res.json(value) : res.status(404).json({ error: "Form submission not found" }); });
-app.post("/v1/forms/:formName/submissions", async (req, res) => {
-  const h = headers(req); const form = configuredForm(req.params.formName!); const body = formSubmissionBody.parse(req.body);
-  const result = await queueFormSubmission({ ...h, provider: config().CRM_PROVIDER, formName: form.name, formId: form.formId, portalId: form.portalId, body });
-  return res.status(202).json({ ...queuedResponse(result), submission_id: result.submissionId, submission_url: `${config().OPENAPI_SERVER_URL.replace(/\/$/, "")}/v1/form-submissions/${result.submissionId}` });
-});
-app.post("/v1/email-validations", async (req, res) => {
-  const h = headers(req); const body = emailValidationBody.parse(req.body);
-  const result = await queueEmailValidation({ ...h, ...body, provider: config().CRM_PROVIDER });
-  return res.status(202).json({ validation_id: result.validationId, status: "pending", duplicate: result.duplicate, status_url: emailValidationUrl(result.validationId), operation_id: result.id, form_submission_id: result.submissionId });
-});
-app.get("/v1/email-validations/:validationId", async (req, res) => {
-  const value = await getEmailValidation(tenant(), req.params.validationId!, req.query.refresh !== "false");
-  return value ? res.json(value) : res.status(404).json({ error: "Email validation not found" });
-});
-app.post("/v1/email-validations/:validationId/outcome", async (req, res) => {
-  headers(req); const body = terminalOutcomeBody.parse(req.body); const value = await completeEmailValidationTerminal(tenant(), req.params.validationId!, body.outcome, body.reason);
-  return value ? res.json(value) : res.status(404).json({ error: "Email validation not found" });
-});
-app.get("/v1/email-validation-action-config/users/:userId", async (req, res) => res.json(await getUserActionConfig(tenant(), req.params.userId!)));
-app.put("/v1/email-validation-action-config/users/:userId", async (req, res) => { headers(req); return res.json(await putUserActionConfig(tenant(), req.params.userId!, actionConfigBody.parse(req.body))); });
 app.get("/v1/custom-objects", async (_req, res) => res.json(await listCustomObjectDefinitions(tenant())));
 app.get("/v1/custom-objects/:objectName", async (req, res) => { const value = await getCustomObjectDefinition(tenant(), req.params.objectName!); value ? res.json(value) : res.status(404).json({ error: "Custom object not found" }); });
 app.get("/v1/custom-objects/:objectName/records", async (req, res) => { const definition = await getCustomObjectDefinition(tenant(), req.params.objectName!); if (!definition) return res.status(404).json({ error: "Custom object not found" }); const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25)); return res.json(await listCustomRecords(tenant(), definition.name, limit, typeof req.query.cursor === "string" ? req.query.cursor : undefined, typeof req.query.contact_id === "string" ? req.query.contact_id : undefined)); });

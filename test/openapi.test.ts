@@ -10,15 +10,9 @@ test("generated OpenAPI exposes the stable CRM and operation paths", async () =>
   assert.ok(spec.paths["/v1/{entityType}"]);
   assert.ok(spec.paths["/v1/{entityType}/{entityId}"]);
   assert.ok(spec.paths["/v1/operations/{operationId}"]);
-  assert.ok(spec.paths["/v1/email-validations"]);
-  assert.ok(spec.paths["/v1/email-validations/{validationId}"]);
-  assert.ok(spec.paths["/v1/email-validations/{validationId}/outcome"]);
-  assert.ok(spec.paths["/v1/email-validation-action-config/users/{userId}"]);
   assert.ok(spec.paths["/v1/custom-objects"]);
   assert.ok(spec.paths["/v1/custom-objects/{objectName}/records"]);
   assert.ok(spec.paths["/v1/custom-objects/{objectName}/records/{recordId}"]);
-  assert.ok(spec.paths["/v1/forms/{formName}/submissions"]);
-  assert.ok(spec.paths["/v1/form-submissions/{submissionId}"]);
   assert.equal("post" in spec.paths["/v1/custom-objects"], false);
   assert.equal("patch" in spec.paths["/v1/custom-objects/{objectName}"], false);
   assert.deepEqual(spec.security, [{ bearerAuth: [] }]);

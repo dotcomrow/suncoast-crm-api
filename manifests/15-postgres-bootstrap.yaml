@@ -1,0 +1,106 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: suncoast-crm-postgres-bootstrap
+  namespace: vault
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: suncoast-crm-postgres-bootstrap }
+      annotations: { linkerd.io/inject: "disabled" }
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      volumes:
+        - name: vault-root-token
+          secret: { secretName: vault-root-token }
+      containers:
+        - name: bootstrap
+          image: hashicorp/vault:1.15.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              apk add --no-cache openssh-client jq >/dev/null
+              export VAULT_ADDR="http://vault.vault.svc.cluster.local:8200"
+              if [ -f /vault-token/VAULT_TOKEN ]; then
+                export VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
+              elif [ -f /vault-token/token ]; then
+                export VAULT_TOKEN="$(cat /vault-token/token)"
+              else
+                echo "Vault root-token file is unavailable" >&2
+                exit 1
+              fi
+
+              crm_secret="$(vault kv get -format=json secret/suncoast-crm-api)"
+              facade_password="$(printf '%s' "$crm_secret" | jq -r '.data.data.facade_database_password // empty')"
+              espocrm_password="$(printf '%s' "$crm_secret" | jq -r '.data.data.espocrm_database_password // empty')"
+              if [ -z "$facade_password" ]; then
+                facade_password="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
+                vault kv patch secret/suncoast-crm-api facade_database_password="$facade_password" >/dev/null
+                echo "Generated the durable CRM facade database password"
+              fi
+              if [ -z "$espocrm_password" ]; then
+                espocrm_password="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
+                vault kv patch secret/suncoast-crm-api espocrm_database_password="$espocrm_password" >/dev/null
+                echo "Generated the EspoCRM database password"
+              fi
+
+              tunnel_host="$(vault kv get -field=value secret/directus_db_ssh_tunnel_host)"
+              tunnel_user="$(vault kv get -field=value secret/directus_db_ssh_tunnel_user)"
+              tunnel_key_b64="$(vault kv get -field=value secret/directus_db_ssh_private_key_b64)"
+              test -n "$tunnel_host"; test -n "$tunnel_user"; test -n "$tunnel_key_b64"
+              umask 077
+              printf '%s' "$tunnel_key_b64" | base64 -d > /tmp/db-tunnel-key
+
+              facade_password_b64="$(printf '%s' "$facade_password" | base64 | tr -d '\n')"
+              espocrm_password_b64="$(printf '%s' "$espocrm_password" | base64 | tr -d '\n')"
+              remote_script="set -eu
+              directus_before=\$(sudo -n -u postgres psql -AtX -d postgres -c \"SELECT oid::text || '|' || pg_get_userbyid(datdba) FROM pg_database WHERE datname='directus';\")
+              test -n \"\$directus_before\"
+              ensure_database() {
+                db=\"\$1\"; role=\"\$2\"; password_b64=\"\$3\"
+                owner=\$(sudo -n -u postgres psql -AtX -d postgres -c \"SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='\$db';\")
+                if [ -n \"\$owner\" ] && [ \"\$owner\" != \"\$role\" ]; then
+                  echo \"Existing \$db database is owned by unexpected role: \$owner\" >&2; exit 1
+                fi
+                password=\$(printf '%s' \"\$password_b64\" | base64 -d)
+                password_sql=\$(printf '%s' \"\$password\" | sed \"s/'/''/g\")
+                if sudo -n -u postgres psql -AtX -d postgres -c \"SELECT 1 FROM pg_roles WHERE rolname='\$role';\" | grep -qx 1; then
+                  sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d postgres -c \"ALTER ROLE \$role WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION CONNECTION LIMIT 20 PASSWORD '\$password_sql';\"
+                else
+                  sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d postgres -c \"CREATE ROLE \$role LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION CONNECTION LIMIT 20 PASSWORD '\$password_sql';\"
+                fi
+                sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d postgres -c \"ALTER ROLE \$role SET statement_timeout='30s'; ALTER ROLE \$role SET lock_timeout='5s'; ALTER ROLE \$role SET idle_in_transaction_session_timeout='30s';\"
+                if [ -z \"\$owner\" ]; then sudo -n -u postgres createdb --owner=\"\$role\" --encoding=UTF8 --template=template0 \"\$db\"; fi
+                test \"\$(sudo -n -u postgres psql -AtX -d postgres -c \"SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='\$db';\")\" = \"\$role\"
+              }
+              ensure_database suncoast_crm suncoast_crm_app '$facade_password_b64'
+              ensure_database espocrm espocrm_app '$espocrm_password_b64'
+              sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d suncoast_crm -c \"REVOKE ALL ON SCHEMA public FROM PUBLIC; CREATE SCHEMA IF NOT EXISTS crm AUTHORIZATION suncoast_crm_app; REVOKE ALL ON SCHEMA crm FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA crm TO suncoast_crm_app;\"
+              sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d espocrm -c \"REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO espocrm_app;\"
+              directus_after=\$(sudo -n -u postgres psql -AtX -d postgres -c \"SELECT oid::text || '|' || pg_get_userbyid(datdba) FROM pg_database WHERE datname='directus';\")
+              test \"\$directus_before\" = \"\$directus_after\"
+              echo 'CRM facade and EspoCRM databases are isolated; Directus database identity is unchanged'"
+
+              connected=false
+              for candidate in "$tunnel_user" ubuntu opc; do
+                [ -n "$candidate" ] || continue
+                if ssh -i /tmp/db-tunnel-key -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+                  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known-hosts \
+                  "$candidate@$tunnel_host" "sudo -n -u postgres true" >/dev/null 2>&1; then
+                  ssh -i /tmp/db-tunnel-key -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+                    -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known-hosts \
+                    "$candidate@$tunnel_host" "$remote_script"
+                  connected=true; break
+                fi
+              done
+              test "$connected" = true
+          volumeMounts:
+            - { name: vault-root-token, mountPath: /vault-token, readOnly: true }
+          securityContext: { allowPrivilegeEscalation: false }
