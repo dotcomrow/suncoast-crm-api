@@ -18,6 +18,9 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: apisix } }
       ports:
         - { protocol: TCP, port: 8082 }
+        # APISIX is meshed, so its upstream connection terminates on Linkerd's
+        # inbound proxy before being forwarded to the confirmation listener.
+        - { protocol: TCP, port: 4143 }
     - from:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: crm } }
       ports:
