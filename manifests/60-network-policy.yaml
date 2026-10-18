@@ -11,6 +11,7 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: k8s-api-gateway } }
       ports:
         - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8082 }
         # Meshed clients connect to the destination pod's Linkerd inbound proxy.
         - { protocol: TCP, port: 4143 }
     - from:

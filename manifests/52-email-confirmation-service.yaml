@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: suncoast-crm-email-confirmation
+  namespace: crm
+  labels: { app: suncoast-crm-api, component: email-confirmation }
+  annotations:
+    gravitee.io/expose: "true"
+    gravitee.io/context-path: "/crm-email-confirmation"
+    gravitee.io/auth-required: "none"
+    gravitee.io/description: "Single-purpose external CRM email confirmation endpoint"
+    gravitee.io/version: "v1"
+    gravitee.io/tags: "crm,email-confirmation"
+    gravitee.io/definition-name: "suncoast-crm-email-confirmation"
+    gravitee.io/definition-summary: "External email confirmation"
+    gravitee.io/definition-description: "Accepts only one-time external signup email confirmation codes."
+    gravitee.io/definition-type: "HTTP"
+    gravitee.io/definition-visibility: "PUBLIC"
+    gravitee.io/definition-state: "STARTED"
+    gravitee.io/definition-lifecycle-state: "PUBLISHED"
+    gravitee.io/definition-context-path: "/crm-email-confirmation"
+    gravitee.io/definition-version: "v1"
+    gravitee.io/definition-listener-host: "suncoast-crm-email-confirmation.crm.svc.cluster.local"
+    gravitee.io/definition-listener-port: "8082"
+    gravitee.io/definition-groups: "external"
+    gravitee.io/definition-tags: "crm,email-confirmation"
+    gravitee.io/definition-labels: "external,email-confirmation"
+    gravitee.io/definition-categories: "platform"
+    gravitee.io/definition-path-mappings: "/crm-email-confirmation,/crm-email-confirmation/confirm-email"
+    gravitee.io/definition-endpoint-groups: '[{"name":"default","type":"http-proxy","endpoints":[{"name":"confirmation-http","type":"http-proxy","weight":1,"configuration":{"target":"http://suncoast-crm-email-confirmation.crm.svc.cluster.local:8082"},"secondary":false}]}]'
+    gravitee.io/definition-plans: '{"open-access":{"name":"Open access","description":"One-time confirmation codes are the sole authorization mechanism","security":{"type":"KEY_LESS"},"status":"PUBLISHED","validation":"AUTO","type":"API","selectionRule":"true"}}'
+    gravitee.io/definition-flows: '[]'
+    gravitee.io/definition-response-templates: '{}'
+spec:
+  selector: { app: suncoast-crm-api, component: api }
+  ports: [{ name: confirmation, port: 8082, targetPort: confirmation }]

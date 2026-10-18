@@ -3,6 +3,7 @@ import { z } from "zod";
 const bool = z.string().default("false").transform((value) => value === "true");
 const env = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
+  EMAIL_CONFIRMATION_PORT: z.coerce.number().int().positive().default(8082),
   DATABASE_URL: z.string().min(1),
   DATABASE_SSL: bool,
   CRM_TENANT_ID: z.string().trim().min(1).default("suncoast"),
@@ -21,6 +22,7 @@ const env = z.object({
   KAFKA_RETRY_TOPIC_6H: z.string().default("crm.commands.retry.6h.v1"),
   KAFKA_RETRY_TOPIC_24H: z.string().default("crm.commands.retry.24h.v1"),
   KAFKA_EVENT_TOPIC: z.string().default("crm.events.v1"),
+  KAFKA_EMAIL_VALIDATION_EVENT_TOPIC: z.string().default("crm.email-validation.events.v1"),
   KAFKA_DLQ_TOPIC: z.string().default("crm.commands.dlq.v1"),
   KAFKA_SECURITY_PROTOCOL: z.enum(["PLAINTEXT", "SASL_PLAINTEXT", "SASL_SSL"]).default("SASL_PLAINTEXT"),
   KAFKA_SASL_MECHANISM: z.enum(["plain", "scram-sha-256", "scram-sha-512"]).default("scram-sha-256"),

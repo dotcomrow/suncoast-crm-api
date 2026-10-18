@@ -36,6 +36,16 @@ spec:
           startupProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5, failureThreshold: 24 }
           readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 10, timeoutSeconds: 3 }
           livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 20, timeoutSeconds: 3 }
+        - name: email-confirmation
+          image: ghcr.io/dotcomrow/suncoast-crm-api:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/email-confirmation.js"]
+          ports: [{ name: confirmation, containerPort: 8082 }]
+          envFrom:
+            - configMapRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-api }
+            - secretRef: { name: suncoast-crm-database }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
 ---
 apiVersion: apps/v1
 kind: Deployment
