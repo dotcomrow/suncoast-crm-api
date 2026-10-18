@@ -22,6 +22,10 @@ async function queueConfirmationEmail(email: string, url: string, id: string): P
       event_key: "crm.external-signup.email-confirmation", notification_key: "crm.external-signup.email-confirmation",
       source: "suncoast-crm-api", severity: "info", priority: "normal", locale: "en", channels: ["email"],
       recipients: [{ type: "email", address: email, channels: ["email"] }],
+      parameters: {
+        confirmation_url: url,
+        expires_hours: cfg.EMAIL_VERIFICATION_TTL_HOURS
+      },
       subject: "Confirm your email address",
       body: `Confirm your email address by opening this link:\n\n${url}\n\nThis link expires in ${cfg.EMAIL_VERIFICATION_TTL_HOURS} hours.`,
       idempotency_key: `suncoast-crm:email-confirmation:${id}`, dedupe_key: `suncoast-crm:email-confirmation:${id}`,
