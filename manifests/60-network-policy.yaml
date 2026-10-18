@@ -15,6 +15,10 @@ spec:
         # Meshed clients connect to the destination pod's Linkerd inbound proxy.
         - { protocol: TCP, port: 4143 }
     - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: apisix } }
+      ports:
+        - { protocol: TCP, port: 8082 }
+    - from:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: crm } }
       ports:
         - { protocol: TCP, port: 8080 }

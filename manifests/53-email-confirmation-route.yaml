@@ -1,0 +1,21 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suncoast-crm-email-confirmation
+  namespace: crm
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"
+spec:
+  ingressClassName: apisix
+  http:
+    - name: email-confirmation-only
+      match:
+        hosts: ["login.suncoast.systems"]
+        paths:
+          - /crm-email-confirmation
+          - /crm-email-confirmation/*
+        methods: [GET, POST]
+      backends:
+        - serviceName: suncoast-crm-email-confirmation
+          servicePort: 8082
+          resolveGranularity: service

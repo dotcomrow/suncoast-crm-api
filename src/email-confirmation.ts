@@ -13,14 +13,16 @@ const codePattern = /^[A-Za-z0-9_-]{43,128}$/;
 const hash = (code: string) => createHash("sha256").update(code, "utf8").digest("hex");
 const page = (title: string, message: string, form = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p>${form}</main></body></html>`;
 
-app.get(["/", "/confirm-email"], (req, res) => {
+const confirmationPaths = ["/", "/confirm-email", "/crm-email-confirmation", "/crm-email-confirmation/confirm-email"];
+
+app.get(confirmationPaths, (req, res) => {
   const code = typeof req.query.code === "string" ? req.query.code : "";
   if (!codePattern.test(code)) return res.status(400).type("html").send(page("Invalid confirmation link", "The confirmation code is not valid."));
   const escaped = code.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return res.status(200).type("html").send(page("Confirm your email", "Select Confirm to verify this email address.", `<form method="post"><input type="hidden" name="code" value="${escaped}"><button type="submit">Confirm</button></form>`));
 });
 
-app.post(["/", "/confirm-email"], async (req, res) => {
+app.post(confirmationPaths, async (req, res) => {
   const code = typeof req.body?.code === "string" ? req.body.code : "";
   if (!codePattern.test(code)) return res.status(400).type("html").send(page("Invalid confirmation code", "The confirmation code is not valid."));
   const result = await inTransaction(async (client) => {

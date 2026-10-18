@@ -6,6 +6,8 @@ metadata:
 data:
   PORT: "8080"
   EMAIL_CONFIRMATION_PORT: "8082"
+  EMAIL_CONFIRMATION_PUBLIC_URL: "https://login.suncoast.systems/crm-email-confirmation/confirm-email"
+  EMAIL_VERIFICATION_TTL_HOURS: "24"
   DATABASE_SSL: "false"
   CRM_TENANT_ID: "suncoast"
   CRM_PROVIDER: "espocrm"
@@ -24,6 +26,7 @@ data:
   KAFKA_RETRY_TOPIC_24H: "crm.commands.retry.24h.v1"
   KAFKA_EVENT_TOPIC: "crm.events.v1"
   KAFKA_EMAIL_VALIDATION_EVENT_TOPIC: "crm.email-validation.events.v1"
+  PLATFORM_NOTIFICATION_SERVICE_URL: "http://platform-notification-service.directus.svc.cluster.local:8080"
   KAFKA_DLQ_TOPIC: "crm.commands.dlq.v1"
   KAFKA_SECURITY_PROTOCOL: "SASL_PLAINTEXT"
   KAFKA_SASL_MECHANISM: "scram-sha-256"

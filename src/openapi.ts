@@ -30,8 +30,14 @@ const recordId = { name: "recordId", in: "path", required: true, schema: { type:
 export function openApiSpec() {
   return {
     openapi: "3.0.3", info: { title: "Suncoast CRM API", version: "1.0.0", description: "Stable provider-neutral CRM contract. Writes are durable asynchronous operations." },
-    servers: [{ url: config().OPENAPI_SERVER_URL }], security: [{ bearerAuth: [] }], tags: [{ name: "CRM" }, { name: "Custom Objects" }, { name: "Operations" }, { name: "AI" }],
+    servers: [{ url: config().OPENAPI_SERVER_URL }], security: [{ bearerAuth: [] }], tags: [{ name: "CRM" }, { name: "Email Verification" }, { name: "Custom Objects" }, { name: "Operations" }, { name: "AI" }],
     paths: {
+      "/v1/email-verifications": {
+        post: { tags: ["Email Verification"], operationId: "requestExternalEmailVerification", summary: "Send a confirmation email for an external signup", parameters: [idempotency], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/EmailVerificationRequest" } } } }, responses: { "202": { description: "Confirmation email accepted", content: { "application/json": { schema: { $ref: "#/components/schemas/EmailVerification" } } } }, "200": { description: "Idempotent duplicate" }, "409": { $ref: "#/components/responses/Error" } } }
+      },
+      "/v1/email-verifications/{verificationId}": {
+        get: { tags: ["Email Verification"], operationId: "getExternalEmailVerification", parameters: [{ name: "verificationId", in: "path", required: true, schema: { type: "string", format: "uuid" } }], responses: { "200": { description: "Verification status", content: { "application/json": { schema: { $ref: "#/components/schemas/EmailVerification" } } } }, "404": { $ref: "#/components/responses/Error" } } }
+      },
       "/v1/custom-objects": {
         get: { tags: ["Custom Objects"], operationId: "listCustomObjects", description: "Read-only definitions managed by deployment migrations.", responses: { "200": { description: "Registered custom object definitions" } } }
       },
@@ -78,6 +84,8 @@ export function openApiSpec() {
       CustomObjectDefinition: { allOf: [{ $ref: "#/components/schemas/CustomObjectDefinitionWrite" }, { type: "object", required: ["id", "provider", "provider_object_type"], properties: { id: { type: "string", format: "uuid" }, provider: { type: "string" }, provider_object_type: { type: "string" }, duplicate: { type: "boolean" }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" } } }] },
       CustomObjectRecordWrite: { type: "object", required: ["contact_id", "properties"], properties: { contact_id: { type: "string", format: "uuid" }, properties: { type: "object", additionalProperties: true } } },
       CustomObjectRecord: { type: "object", required: ["id", "object_name", "contact_id", "properties", "version"], properties: { id: { type: "string", format: "uuid" }, object_name: { type: "string" }, contact_id: { type: "string", format: "uuid" }, provider_id: { type: "string", nullable: true }, properties: { type: "object", additionalProperties: true }, version: { type: "integer" }, created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" } } },
+      EmailVerificationRequest: { type: "object", required: ["email"], additionalProperties: false, properties: { email: { type: "string", format: "email", maxLength: 320 }, purpose: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,62}$", default: "external-signup" } } },
+      EmailVerification: { type: "object", required: ["id", "email", "purpose", "status", "expires_at", "created_at"], properties: { id: { type: "string", format: "uuid" }, email: { type: "string", format: "email" }, purpose: { type: "string" }, status: { type: "string", enum: ["pending", "verified", "expired"] }, expires_at: { type: "string", format: "date-time" }, verified_at: { type: "string", format: "date-time", nullable: true }, created_at: { type: "string", format: "date-time" }, duplicate: { type: "boolean" } } },
       QueuedOperation: queued,
       Error: error
     }, responses: {

@@ -10,6 +10,7 @@ import { getEntity, getOperation, listEntities, queueOperation } from "./reposit
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
 import { aiBody, entityBody, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
+import { createEmailVerification, emailVerificationBody, getEmailVerification } from "./email-verifications.js";
 
 const app = express();
 app.disable("x-powered-by"); app.use(helmet()); app.use(express.json({ limit: "1mb" }));
@@ -23,9 +24,11 @@ const tenant = () => config().CRM_TENANT_ID;
 const queuedResponse = (result: { id: string; status: string; duplicate: boolean }) => ({ operation_id: result.id, status: result.status, duplicate: result.duplicate, status_url: `${config().OPENAPI_SERVER_URL.replace(/\/$/, "")}/v1/operations/${result.id}` });
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
+app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records, to_regclass('crm_email_verifications') AS email_verifications"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records || !row?.email_verifications) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
 app.get("/openapi.json", (_req, res) => res.json(openApiSpec()));
 app.get("/v1/operations/:operationId", async (req, res) => { const value = await getOperation(tenant(), req.params.operationId!); value ? res.json(value) : res.status(404).json({ error: "Operation not found" }); });
+app.post("/v1/email-verifications", async (req, res) => { const h = headers(req); const body = emailVerificationBody.parse(req.body); const value = await createEmailVerification(body.email, body.purpose, h.idempotencyKey); res.status(value.duplicate ? 200 : 202).json(value); });
+app.get("/v1/email-verifications/:verificationId", async (req, res) => { const value = await getEmailVerification(req.params.verificationId!); value ? res.json(value) : res.status(404).json({ error: "Email verification not found" }); });
 app.get("/v1/custom-objects", async (_req, res) => res.json(await listCustomObjectDefinitions(tenant())));
 app.get("/v1/custom-objects/:objectName", async (req, res) => { const value = await getCustomObjectDefinition(tenant(), req.params.objectName!); value ? res.json(value) : res.status(404).json({ error: "Custom object not found" }); });
 app.get("/v1/custom-objects/:objectName/records", async (req, res) => { const definition = await getCustomObjectDefinition(tenant(), req.params.objectName!); if (!definition) return res.status(404).json({ error: "Custom object not found" }); const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25)); return res.json(await listCustomRecords(tenant(), definition.name, limit, typeof req.query.cursor === "string" ? req.query.cursor : undefined, typeof req.query.contact_id === "string" ? req.query.contact_id : undefined)); });

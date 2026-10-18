@@ -162,11 +162,17 @@ spec:
                 test "$status" = 201
                 echo "Created the EspoCRM membership-roles claim mapper"
               else
+                mapper_update_payload="$(printf '%s' "$mapper_payload" | jq -c \
+                  --arg id "$mapper_id" '. + {id:$id}')"
                 status="$(curl -sS -o /tmp/keycloak-mapper.json -w '%{http_code}' -X PUT \
                   -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
-                  --data "$mapper_payload" \
+                  --data "$mapper_update_payload" \
                   "$KC_BASE/admin/realms/internal/clients/$internal_id/protocol-mappers/models/$mapper_id")"
-                test "$status" = 204
+                if [ "$status" != 204 ]; then
+                  echo "Failed to update the EspoCRM membership-roles claim mapper: HTTP $status" >&2
+                  cat /tmp/keycloak-mapper.json >&2
+                  exit 1
+                fi
                 echo "Reconciled the EspoCRM membership-roles claim mapper"
               fi
               unset ACCESS_TOKEN CLIENT_SECRET client_payload

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5433/test";
+process.env.EMAIL_CONFIRMATION_PUBLIC_URL ??= "https://example.test/crm-email-confirmation/confirm-email";
+process.env.PLATFORM_NOTIFICATION_TOKEN ??= "test-token-that-is-at-least-thirty-two-characters";
 
 test("generated OpenAPI exposes the stable CRM and operation paths", async () => {
   const { openApiSpec } = await import("../src/openapi.js");
@@ -13,6 +15,9 @@ test("generated OpenAPI exposes the stable CRM and operation paths", async () =>
   assert.ok(spec.paths["/v1/custom-objects"]);
   assert.ok(spec.paths["/v1/custom-objects/{objectName}/records"]);
   assert.ok(spec.paths["/v1/custom-objects/{objectName}/records/{recordId}"]);
+  assert.equal(spec.paths["/v1/email-verifications"].post.operationId, "requestExternalEmailVerification");
+  assert.equal(spec.paths["/v1/email-verifications/{verificationId}"].get.operationId, "getExternalEmailVerification");
+  assert.equal(spec.paths["/v1/email-verifications"].post.parameters[0].name, "Idempotency-Key");
   assert.equal("post" in spec.paths["/v1/custom-objects"], false);
   assert.equal("patch" in spec.paths["/v1/custom-objects/{objectName}"], false);
   assert.deepEqual(spec.security, [{ bearerAuth: [] }]);
