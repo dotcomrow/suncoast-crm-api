@@ -133,7 +133,14 @@ kind: Service
 metadata:
   name: espocrm
   namespace: crm
-  labels: { app.kubernetes.io/name: espocrm }
+  labels:
+    app.kubernetes.io/name: espocrm
+    teleport.dev/enroll: "true"
+  annotations:
+    teleport.dev/name: "espocrm"
+    teleport.dev/protocol: "http"
+    teleport.dev/public-addr: "espocrm.teleport.app.suncoast.systems"
+    teleport.dev/description: "EspoCRM Web Application"
 spec:
   selector: { app.kubernetes.io/name: espocrm }
   ports: [{ name: http, port: 80, targetPort: http }]
@@ -196,7 +203,7 @@ spec:
             - { name: ESPOCRM_DATABASE_NAME, value: espocrm }
             - { name: ESPOCRM_DATABASE_USER, value: espocrm_app }
             - { name: ESPOCRM_ADMIN_USERNAME, value: admin }
-            - { name: ESPOCRM_SITE_URL, value: "http://espocrm.crm.svc.cluster.local" }
+            - { name: ESPOCRM_SITE_URL, value: "https://espocrm.teleport.app.suncoast.systems" }
             - { name: ESPOCRM_DATABASE_PASSWORD, valueFrom: { secretKeyRef: { name: espocrm-runtime, key: ESPOCRM_DATABASE_PASSWORD } } }
             - { name: ESPOCRM_ADMIN_PASSWORD, valueFrom: { secretKeyRef: { name: espocrm-runtime, key: ESPOCRM_ADMIN_PASSWORD } } }
           volumeMounts:
