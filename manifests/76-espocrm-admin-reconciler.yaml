@@ -13,11 +13,12 @@ spec:
   schedule: "*/1 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 2
       activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 3600
       template:
         metadata:
           labels:
@@ -56,18 +57,28 @@ spec:
 
                   request() {
                     method="$1"; path="$2"; output="$3"; payload="${4:-}"
-                    if [ -n "$payload" ]; then
-                      status="$(curl -sS -o "$output" -w '%{http_code}' -X "$method" \
-                        -H "Authorization: Basic $ADMIN_AUTH" -H 'Content-Type: application/json' \
-                        --data "$payload" "$ESPO_BASE$path")"
-                    else
-                      status="$(curl -sS -o "$output" -w '%{http_code}' -X "$method" \
-                        -H "Authorization: Basic $ADMIN_AUTH" "$ESPO_BASE$path")"
-                    fi
-                    case "$status" in
-                      2??) ;;
-                      *) echo "EspoCRM $method $path failed with HTTP $status" >&2; cat "$output" >&2; exit 1 ;;
-                    esac
+                    attempt=1
+                    while [ "$attempt" -le 8 ]; do
+                      if [ -n "$payload" ]; then
+                        status="$(curl -sS --connect-timeout 5 --max-time 20 -o "$output" -w '%{http_code}' -X "$method" \
+                          -H "Authorization: Basic $ADMIN_AUTH" -H 'Content-Type: application/json' \
+                          --data "$payload" "$ESPO_BASE$path" || true)"
+                      else
+                        status="$(curl -sS --connect-timeout 5 --max-time 20 -o "$output" -w '%{http_code}' -X "$method" \
+                          -H "Authorization: Basic $ADMIN_AUTH" "$ESPO_BASE$path" || true)"
+                      fi
+                      case "$status" in
+                        2??) return 0 ;;
+                      esac
+                      if [ "$attempt" -lt 8 ]; then
+                        echo "EspoCRM $method $path attempt $attempt failed with HTTP ${status:-000}; retrying" >&2
+                        sleep 5
+                      fi
+                      attempt=$((attempt + 1))
+                    done
+                    echo "EspoCRM $method $path failed after 8 attempts with HTTP ${status:-000}" >&2
+                    test ! -s "$output" || cat "$output" >&2
+                    exit 1
                   }
 
                   request GET '/Team?maxSize=200&select=id,name' /tmp/teams.json
