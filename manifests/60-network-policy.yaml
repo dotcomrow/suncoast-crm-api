@@ -27,6 +27,15 @@ spec:
         - { protocol: TCP, port: 8080 }
         - { protocol: TCP, port: 4143 }
     - from:
+        # Browser registrations are handled by this service in the Directus
+        # namespace and create CRM email-verification requests over the API.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: directus } }
+          podSelector: { matchLabels: { app: platform-notification-service } }
+      ports:
+        - { protocol: TCP, port: 8080 }
+        # Meshed clients connect to the destination pod's Linkerd inbound proxy.
+        - { protocol: TCP, port: 4143 }
+    - from:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: linkerd-viz } }
       ports:
         # Allow Linkerd Viz Prometheus to scrape the proxy admin metrics endpoint.
