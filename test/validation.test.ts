@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { externalContactSignupBody } from "../src/validation.js";
+import { externalContactOperationIdempotencyKey, externalContactSignupBody } from "../src/validation.js";
 
 test("external contact signups require a valid email", () => {
   assert.equal(externalContactSignupBody.safeParse({ properties: { firstname: "Pat" } }).success, false);
@@ -12,4 +12,12 @@ test("external contact signups accept the stable and native EspoCRM email names"
   const native = externalContactSignupBody.parse({ properties: { emailAddress: "user@example.com" } });
   assert.equal(stable.purpose, "external-signup");
   assert.equal(native.purpose, "external-signup");
+});
+
+test("notification contact creation is idempotent per normalized email", () => {
+  const first = externalContactOperationIdempotencyKey(" User@Example.com ", "notifications", "request-one");
+  const replay = externalContactOperationIdempotencyKey("user@example.com", "notifications", "request-two");
+  assert.equal(first, replay);
+  assert.match(first, /^notification-contact:[a-f0-9]{32}$/);
+  assert.equal(externalContactOperationIdempotencyKey("user@example.com", "external-signup", "request-three"), "request-three");
 });

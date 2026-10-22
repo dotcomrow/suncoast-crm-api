@@ -8,7 +8,7 @@ import { openApiSpec } from "./openapi.js";
 import { runOutbox, stopOutbox } from "./outbox.js";
 import { getEntity, getOperation, listEntities, queueOperation } from "./repository.js";
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
-import { aiBody, entityBody, externalContactSignupBody, updateBody } from "./validation.js";
+import { aiBody, entityBody, externalContactOperationIdempotencyKey, externalContactSignupBody, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
 import { createEmailVerification, emailVerificationBody, expireDueEmailVerifications, getEmailVerification } from "./email-verifications.js";
 
@@ -35,8 +35,9 @@ app.post("/v1/external-signups/contacts", async (req, res) => {
   const rawEmail = body.properties.email ?? body.properties.emailAddress;
   const email = emailVerificationBody.shape.email.parse(rawEmail);
   const entityId = randomUUID();
-  const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, entityId);
-  const result = await queueOperation({ ...h, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId: String(verification.entity_id ?? entityId), payload: { properties: body.properties, associations: body.associations } });
+  const contactIdempotencyKey = externalContactOperationIdempotencyKey(email, body.purpose, h.idempotencyKey);
+  const result = await queueOperation({ ...h, idempotencyKey: contactIdempotencyKey, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties: body.properties, associations: body.associations } });
+  const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, String(result.entityId ?? entityId));
   res.status(202).json({ ...queuedResponse(result), entity_id: result.entityId, email_verification: verification });
 });
 app.get("/v1/custom-objects", async (_req, res) => res.json(await listCustomObjectDefinitions(tenant())));

@@ -1,5 +1,12 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { entityTypes } from "./types.js";
+
+export function externalContactOperationIdempotencyKey(email: string, purpose: string, requestIdempotencyKey: string): string {
+  if (purpose !== "notifications") return requestIdempotencyKey;
+  const normalizedEmail = email.trim().toLowerCase();
+  return `notification-contact:${createHash("sha256").update(normalizedEmail).digest("hex").slice(0, 32)}`;
+}
 
 export const entityBody = z.object({
   properties: z.record(z.string(), z.unknown()).default({}),

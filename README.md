@@ -11,10 +11,14 @@ Every write requires an `Idempotency-Key` header of at least eight characters. R
 The OpenAPI contract is available at `/crm/openapi.json` when routed through the cluster ingress.
 
 External signup integrations use `POST /v1/external-signups/contacts`. This
-explicit endpoint queues the provider-neutral contact creation and sends a
-one-time confirmation link to `properties.email` (or the native
-`properties.emailAddress` alias). Generic `POST /v1/contacts` remains suitable
-for internal integrations and does not send email automatically.
+explicit endpoint queues the provider-neutral contact creation immediately and
+sends a linked one-time confirmation link to `properties.email` (or the native
+`properties.emailAddress` alias). For the `notifications` purpose, contact
+creation is idempotent per normalized email while verification attempts retain
+their own idempotency keys. Callers may set `email_verified=false` so the
+provider record visibly distinguishes pending confirmation. Generic
+`POST /v1/contacts` remains suitable for internal integrations and does not send
+email automatically.
 The deployment manifest enables this external-only workflow with
 `EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED=true`.
 
