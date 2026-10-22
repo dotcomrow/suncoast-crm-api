@@ -61,9 +61,35 @@ export async function createEmailVerification(email: string, purpose: string, id
 }
 
 export async function getEmailVerification(id: string) {
-  const result = await pool.query(`UPDATE crm_email_verifications SET status='expired',updated_at=now()
-    WHERE tenant_id=$1 AND id=$2 AND status='pending' AND expires_at <= now() RETURNING id`, [config().CRM_TENANT_ID, id]);
-  void result;
+  await expireDueEmailVerifications(id);
   const found = await pool.query("SELECT * FROM crm_email_verifications WHERE tenant_id=$1 AND id=$2", [config().CRM_TENANT_ID, id]);
   return found.rows[0] ? response(found.rows[0]) : null;
+}
+
+export async function expireDueEmailVerifications(verificationId?: string): Promise<number> {
+  return inTransaction(async (client) => {
+    const expired = await client.query(
+      `UPDATE crm_email_verifications
+       SET status='expired',updated_at=now()
+       WHERE tenant_id=$1 AND status='pending' AND expires_at <= now()
+         AND ($2::uuid IS NULL OR id=$2::uuid)
+       RETURNING id,email,entity_id,updated_at`,
+      [config().CRM_TENANT_ID, verificationId ?? null]
+    );
+    for (const row of expired.rows) {
+      await client.query(
+        "INSERT INTO crm_outbox (id,aggregate_id,topic,message_key,payload) VALUES ($1,$2,$3,$4,$5)",
+        [randomUUID(), row.id, config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC, row.id, {
+          schemaVersion: 1,
+          type: "crm.email-validation.expired",
+          validationId: row.id,
+          entityId: row.entity_id,
+          email: row.email,
+          outcome: "EXPIRED",
+          occurredAt: new Date(row.updated_at).toISOString()
+        }]
+      );
+    }
+    return expired.rowCount ?? 0;
+  });
 }

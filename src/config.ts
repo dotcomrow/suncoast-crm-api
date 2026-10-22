@@ -6,6 +6,7 @@ const env = z.object({
   EMAIL_CONFIRMATION_PORT: z.coerce.number().int().positive().default(8082),
   EMAIL_CONFIRMATION_PUBLIC_URL: z.string().url().default("https://login.suncoast.systems/crm-email-confirmation/confirm-email"),
   EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().positive().max(168).default(24),
+  EMAIL_VERIFICATION_EXPIRY_SWEEP_MS: z.coerce.number().int().positive().default(60000),
   EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED: bool,
   DATABASE_URL: z.string().min(1),
   DATABASE_SSL: bool,

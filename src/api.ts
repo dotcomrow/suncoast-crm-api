@@ -10,7 +10,7 @@ import { getEntity, getOperation, listEntities, queueOperation } from "./reposit
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
 import { aiBody, entityBody, externalContactSignupBody, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
-import { createEmailVerification, emailVerificationBody, getEmailVerification } from "./email-verifications.js";
+import { createEmailVerification, emailVerificationBody, expireDueEmailVerifications, getEmailVerification } from "./email-verifications.js";
 
 const app = express();
 app.disable("x-powered-by"); app.use(helmet()); app.use(express.json({ limit: "1mb" }));
@@ -56,4 +56,19 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 const server = app.listen(config().PORT, () => console.log(`CRM API listening on ${config().PORT}`));
 void runOutbox();
-for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => { stopOutbox(); server.close(() => void pool.end().finally(() => process.exit(0))); });
+const expirySweep = async (): Promise<void> => {
+  try {
+    const expired = await expireDueEmailVerifications();
+    if (expired > 0) console.log(`Expired ${expired} pending email verification(s)`);
+  } catch (error) {
+    console.error("Email verification expiry sweep failed", error);
+  }
+};
+void expirySweep();
+const expiryTimer = setInterval(() => void expirySweep(), config().EMAIL_VERIFICATION_EXPIRY_SWEEP_MS);
+expiryTimer.unref();
+for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => {
+  clearInterval(expiryTimer);
+  stopOutbox();
+  server.close(() => void pool.end().finally(() => process.exit(0)));
+});
