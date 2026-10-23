@@ -9,6 +9,7 @@ import { cacheGet, cacheSet, entityCacheKey } from "./cache.js";
 export interface QueueInput {
   tenantId: string; provider: string; action: CommandAction; entityType?: string; entityId?: string;
   payload: Record<string, unknown>; idempotencyKey: string; correlationId: string;
+  retryFailed?: boolean;
 }
 
 interface OperationIdentity { id: string; status: string; entity_id: string | null; action: CommandAction; entity_type: string | null; request: Record<string, unknown> }
@@ -26,12 +27,31 @@ export async function queueOperation(input: QueueInput): Promise<{ id: string; s
     );
     if (!inserted.rowCount) {
       const existing = await client.query<OperationIdentity>(
-        "SELECT id,status,entity_id,action,entity_type,request FROM crm_operations WHERE tenant_id=$1 AND idempotency_key=$2",
+        "SELECT id,status,entity_id,action,entity_type,request FROM crm_operations WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE",
         [input.tenantId, input.idempotencyKey]
       );
       const row = existing.rows[0];
       if (!row) throw new Error("Idempotency conflict could not be resolved");
       const sameTarget = input.action === "create" || row.entity_id === (input.entityId ?? null);
+      if (input.retryFailed && row.status === "failed" && row.action === input.action && row.entity_type === (input.entityType ?? null) && sameTarget) {
+        const entityId = row.entity_id ?? input.entityId;
+        const command: CrmCommand = {
+          schemaVersion: 1, id: commandId, operationId: row.id, tenantId: input.tenantId, provider: input.provider,
+          action: input.action, entityType: input.entityType, entityId, payload: input.payload,
+          correlationId: input.correlationId, requestedAt: new Date().toISOString()
+        };
+        await client.query(
+          `UPDATE crm_operations
+           SET status='queued',request=$2,correlation_id=$3,attempts=0,started_at=NULL,finished_at=NULL,error=NULL,result=NULL
+           WHERE id=$1`,
+          [row.id, input.payload, input.correlationId]
+        );
+        await client.query(
+          "INSERT INTO crm_outbox (id, aggregate_id, topic, message_key, payload) VALUES ($1,$2,$3,$4,$5)",
+          [commandId, row.id, config().KAFKA_COMMAND_TOPIC, input.tenantId, command]
+        );
+        return { id: row.id, status: "queued", entityId, duplicate: true };
+      }
       if (row.action !== input.action || row.entity_type !== (input.entityType ?? null) || !sameTarget || !isDeepStrictEqual(row.request, input.payload)) {
         throw Object.assign(new Error("Idempotency-Key was already used for a different request"), { status: 409 });
       }

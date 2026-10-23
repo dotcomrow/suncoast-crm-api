@@ -8,7 +8,7 @@ import { openApiSpec } from "./openapi.js";
 import { runOutbox, stopOutbox } from "./outbox.js";
 import { getEntity, getOperation, listEntities, queueOperation } from "./repository.js";
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
-import { aiBody, entityBody, externalContactOperationIdempotencyKey, externalContactSignupBody, updateBody } from "./validation.js";
+import { aiBody, entityBody, externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
 import { createEmailVerification, emailVerificationBody, expireDueEmailVerifications, getEmailVerification } from "./email-verifications.js";
 
@@ -34,9 +34,10 @@ app.post("/v1/external-signups/contacts", async (req, res) => {
   const body = externalContactSignupBody.parse(req.body);
   const rawEmail = body.properties.email ?? body.properties.emailAddress;
   const email = emailVerificationBody.shape.email.parse(rawEmail);
+  const properties = externalContactProperties(body.properties);
   const entityId = randomUUID();
   const contactIdempotencyKey = externalContactOperationIdempotencyKey(email, body.purpose, h.idempotencyKey);
-  const result = await queueOperation({ ...h, idempotencyKey: contactIdempotencyKey, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties: body.properties, associations: body.associations } });
+  const result = await queueOperation({ ...h, idempotencyKey: contactIdempotencyKey, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties, associations: body.associations }, retryFailed: true });
   const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, String(result.entityId ?? entityId));
   res.status(202).json({ ...queuedResponse(result), entity_id: result.entityId, email_verification: verification });
 });

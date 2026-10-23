@@ -8,6 +8,16 @@ export function externalContactOperationIdempotencyKey(email: string, purpose: s
   return `notification-contact:${createHash("sha256").update(normalizedEmail).digest("hex").slice(0, 32)}`;
 }
 
+export function externalContactProperties(properties: Record<string, unknown>): Record<string, unknown> {
+  const firstName = properties.firstname ?? properties.firstName;
+  const lastName = properties.lastname ?? properties.lastName;
+  return {
+    ...properties,
+    ...((typeof firstName !== "string" || !firstName.trim()) ? { firstname: "Notification" } : {}),
+    ...((typeof lastName !== "string" || !lastName.trim()) ? { lastname: "Subscriber" } : {})
+  };
+}
+
 export const entityBody = z.object({
   properties: z.record(z.string(), z.unknown()).default({}),
   associations: z.record(z.string(), z.array(z.string())).default({})

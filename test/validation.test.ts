@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { externalContactOperationIdempotencyKey, externalContactSignupBody } from "../src/validation.js";
+import { externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody } from "../src/validation.js";
 
 test("external contact signups require a valid email", () => {
   assert.equal(externalContactSignupBody.safeParse({ properties: { firstname: "Pat" } }).success, false);
@@ -20,4 +20,17 @@ test("notification contact creation is idempotent per normalized email", () => {
   assert.equal(first, replay);
   assert.match(first, /^notification-contact:[a-f0-9]{32}$/);
   assert.equal(externalContactOperationIdempotencyKey("user@example.com", "external-signup", "request-three"), "request-three");
+});
+
+test("external contacts receive editable placeholder names when no name is supplied", () => {
+  assert.deepEqual(externalContactProperties({ email: "user@example.com" }), {
+    email: "user@example.com",
+    firstname: "Notification",
+    lastname: "Subscriber"
+  });
+  assert.deepEqual(externalContactProperties({ email: "user@example.com", firstName: "Pat", lastName: "Lee" }), {
+    email: "user@example.com",
+    firstName: "Pat",
+    lastName: "Lee"
+  });
 });
