@@ -8,10 +8,10 @@ import { openApiSpec } from "./openapi.js";
 import { runOutbox, stopOutbox } from "./outbox.js";
 import { getEntity, getOperation, listEntities, queueOperation } from "./repository.js";
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
-import { aiBody, entityBody, externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, externalContactSubjectId, updateBody } from "./validation.js";
+import { aiBody, contactCommunicationPreferenceBody, entityBody, externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, externalContactSubjectId, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
 import { createEmailVerification, emailVerificationBody, expireDueEmailVerifications, getEmailVerification } from "./email-verifications.js";
-import { resolveContactSubject } from "./contact-emails.js";
+import { resolveContactSubject, setContactEmailCommunicationsPreference } from "./contact-emails.js";
 import { purgeContactByProviderId } from "./contact-purge.js";
 import { contactPurgeAuthorized } from "./internal-auth.js";
 
@@ -27,7 +27,7 @@ const tenant = () => config().CRM_TENANT_ID;
 const queuedResponse = (result: { id: string; status: string; duplicate: boolean }) => ({ operation_id: result.id, status: result.status, duplicate: result.duplicate, status_url: `${config().OPENAPI_SERVER_URL.replace(/\/$/, "")}/v1/operations/${result.id}` });
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records, to_regclass('crm_email_verifications') AS email_verifications, to_regclass('crm_contact_subjects') AS contact_subjects, to_regclass('crm_contact_emails') AS contact_emails"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records || !row?.email_verifications || !row?.contact_subjects || !row?.contact_emails) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
+app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records, to_regclass('crm_email_verifications') AS email_verifications, to_regclass('crm_contact_subjects') AS contact_subjects, to_regclass('crm_contact_emails') AS contact_emails, to_regclass('crm_contact_communication_preferences') AS communication_preferences"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records || !row?.email_verifications || !row?.contact_subjects || !row?.contact_emails || !row?.communication_preferences) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
 app.get("/openapi.json", (_req, res) => res.json(openApiSpec()));
 app.post("/internal/admin/contacts/provider/:providerId/purge", async (req, res) => {
   if (!contactPurgeAuthorized(config().CONTACT_PURGE_TOKEN, req.header("authorization"))) return res.status(401).json({ error: "Unauthorized" });
@@ -52,6 +52,18 @@ app.post("/v1/external-signups/contacts", async (req, res) => {
   const result = await queueOperation({ ...h, idempotencyKey: contactIdempotencyKey, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties, associations: body.associations }, retryFailed: true });
   const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, String(result.entityId ?? entityId), body.primary_email);
   res.status(202).json({ ...queuedResponse(result), entity_id: result.entityId, email_verification: verification });
+});
+app.put("/v1/contact-communications/preference", async (req, res) => {
+  headers(req);
+  const body = contactCommunicationPreferenceBody.parse(req.body);
+  const records = await setContactEmailCommunicationsPreference(tenant(), body.email, body.communications_opt_out);
+  res.status(202).json({
+    ok: true,
+    email: body.email,
+    communications_opt_out: body.communications_opt_out,
+    affected_contacts: new Set(records.map((record) => record.entityId)).size,
+    projection_status: "pending"
+  });
 });
 app.get("/v1/custom-objects", async (_req, res) => res.json(await listCustomObjectDefinitions(tenant())));
 app.get("/v1/custom-objects/:objectName", async (req, res) => { const value = await getCustomObjectDefinition(tenant(), req.params.objectName!); value ? res.json(value) : res.status(404).json({ error: "Custom object not found" }); });

@@ -114,7 +114,7 @@ export class EspoCrmProvider implements CrmProvider {
     emailAddressData.push({
       emailAddress: email.email,
       primary: email.isPrimary,
-      optOut: existing?.optOut === true,
+      optOut: email.communicationsOptOut,
       invalid: existing?.invalid === true
     });
     if (!emailAddressData.some((item) => item.primary)) emailAddressData[0]!.primary = true;

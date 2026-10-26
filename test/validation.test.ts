@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, externalContactSubjectId } from "../src/validation.js";
+import { contactCommunicationPreferenceBody, externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, externalContactSubjectId } from "../src/validation.js";
 
 test("external contact signups require a valid email", () => {
   assert.equal(externalContactSignupBody.safeParse({ properties: { firstname: "Pat" } }).success, false);
@@ -12,6 +12,17 @@ test("external contact signups accept the stable and native EspoCRM email names"
   const native = externalContactSignupBody.parse({ properties: { emailAddress: "user@example.com" } });
   assert.equal(stable.purpose, "external-signup");
   assert.equal(native.purpose, "external-signup");
+});
+
+test("communication preferences normalize email and require an explicit opt-out value", () => {
+  assert.deepEqual(contactCommunicationPreferenceBody.parse({
+    email: " User@Example.com ",
+    communications_opt_out: true
+  }), {
+    email: "user@example.com",
+    communications_opt_out: true
+  });
+  assert.equal(contactCommunicationPreferenceBody.safeParse({ email: "user@example.com" }).success, false);
 });
 
 test("notification contact creation is idempotent per stable subject", () => {

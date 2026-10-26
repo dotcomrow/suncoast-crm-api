@@ -51,7 +51,9 @@ async function syncContactEmailProjection(client: PoolClient, verification: Reco
       email: candidate.email,
       primary: candidate.isPrimary,
       status: candidate.status,
-      verified_at: candidate.verifiedAt
+      verified_at: candidate.verifiedAt,
+      communications_opt_out: candidate.communicationsOptOut,
+      communications_opt_out_at: candidate.communicationsOptOutAt
     })),
     ...(primary ? {
       email: primary.email,

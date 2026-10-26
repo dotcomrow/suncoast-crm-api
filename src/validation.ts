@@ -45,6 +45,10 @@ export const externalContactSignupBody = entityBody.extend({
   const parsed = z.string().trim().email().max(320).safeParse(email);
   if (!parsed.success) context.addIssue({ code: z.ZodIssueCode.custom, path: ["properties", "email"], message: "A valid contact email is required" });
 });
+export const contactCommunicationPreferenceBody = z.object({
+  email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
+  communications_opt_out: z.boolean()
+});
 export const updateBody = entityBody.partial().refine((value) => Object.keys(value).length > 0, "At least one field is required");
 export const aiBody = z.object({
   entity_type: z.enum(entityTypes),

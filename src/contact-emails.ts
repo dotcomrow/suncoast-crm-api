@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
-import { pool } from "./db.js";
+import { inTransaction, pool } from "./db.js";
 
 export type ContactEmailStatus = "pending" | "verified" | "expired";
 
@@ -14,6 +14,8 @@ export interface ContactEmailState {
   isPrimary: boolean;
   verifiedAt: string | null;
   providerId: string | null;
+  communicationsOptOut: boolean;
+  communicationsOptOutAt: string | null;
 }
 
 const state = (row: Record<string, unknown>): ContactEmailState => ({
@@ -25,7 +27,9 @@ const state = (row: Record<string, unknown>): ContactEmailState => ({
   status: row.status as ContactEmailStatus,
   isPrimary: row.is_primary === true,
   verifiedAt: row.verified_at ? new Date(String(row.verified_at)).toISOString() : null,
-  providerId: row.provider_id ? String(row.provider_id) : null
+  providerId: row.provider_id ? String(row.provider_id) : null,
+  communicationsOptOut: row.communications_opt_out === true,
+  communicationsOptOutAt: row.communications_opt_out_at ? new Date(String(row.communications_opt_out_at)).toISOString() : null
 });
 
 export async function resolveContactSubject(tenantId: string, subjectId: string, email: string): Promise<{ entityId: string; duplicate: boolean }> {
@@ -76,7 +80,7 @@ export async function upsertContactEmail(client: PoolClient, input: {
       [input.tenantId, input.entityId]
     );
   }
-  const result = await client.query(
+  let result = await client.query(
     `INSERT INTO crm_contact_emails (
        id,tenant_id,entity_id,email,normalized_email,purpose,status,is_primary,current_verification_id
      ) VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8)
@@ -90,6 +94,20 @@ export async function upsertContactEmail(client: PoolClient, input: {
      RETURNING *`,
     [randomUUID(), input.tenantId, input.entityId, input.email, normalizedEmail, input.purpose, isPrimary, input.verificationId]
   );
+  const preference = await client.query(
+    `SELECT communications_opt_out,communications_opt_out_at
+     FROM crm_contact_communication_preferences
+     WHERE tenant_id=$1 AND normalized_email=$2`,
+    [input.tenantId, normalizedEmail]
+  );
+  if (preference.rowCount) {
+    result = await client.query(
+      `UPDATE crm_contact_emails
+       SET communications_opt_out=$2,communications_opt_out_at=$3,updated_at=now()
+       WHERE id=$1 RETURNING *`,
+      [result.rows[0].id, preference.rows[0].communications_opt_out, preference.rows[0].communications_opt_out_at]
+    );
+  }
   return state(result.rows[0]);
 }
 
@@ -118,4 +136,43 @@ export async function setContactEmailProjection(client: PoolClient, tenantId: st
     "UPDATE crm_contact_emails SET provider_id=$3,projected_at=now() WHERE tenant_id=$1 AND id=$2",
     [tenantId, id, providerId]
   );
+}
+
+export async function setContactEmailCommunicationsPreference(
+  tenantId: string,
+  email: string,
+  communicationsOptOut: boolean
+): Promise<ContactEmailState[]> {
+  const normalizedEmail = email.trim().toLowerCase();
+  return inTransaction(async (client) => {
+    const preference = await client.query(
+      `INSERT INTO crm_contact_communication_preferences (
+         tenant_id,normalized_email,communications_opt_out,communications_opt_out_at
+       ) VALUES ($1,$2,$3,CASE WHEN $3 THEN now() ELSE NULL END)
+       ON CONFLICT (tenant_id,normalized_email) DO UPDATE SET
+         communications_opt_out=EXCLUDED.communications_opt_out,
+         communications_opt_out_at=CASE
+           WHEN EXCLUDED.communications_opt_out THEN COALESCE(crm_contact_communication_preferences.communications_opt_out_at,now())
+           ELSE NULL
+         END,
+         updated_at=now()
+       RETURNING communications_opt_out,communications_opt_out_at`,
+      [tenantId, normalizedEmail, communicationsOptOut]
+    );
+    const result = await client.query(
+      `UPDATE crm_contact_emails
+       SET communications_opt_out=$3,
+           communications_opt_out_at=$4,
+           updated_at=now()
+       WHERE tenant_id=$1 AND normalized_email=$2
+       RETURNING *`,
+      [
+        tenantId,
+        normalizedEmail,
+        preference.rows[0].communications_opt_out,
+        preference.rows[0].communications_opt_out_at
+      ]
+    );
+    return result.rows.map(state);
+  });
 }
