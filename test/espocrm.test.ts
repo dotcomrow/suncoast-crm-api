@@ -57,6 +57,44 @@ test("EspoCRM adapter maps provider-neutral email confirmation fields", async (t
   assert.equal(body.email_verified, undefined);
 });
 
+test("EspoCRM adapter preserves multiple native emails and projects per-address verification", async (t) => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ url: String(url), init });
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith("/Contact/contact-1") && !init?.method) {
+      return new Response(JSON.stringify({
+        id: "contact-1",
+        emailAddressData: [{ emailAddress: "primary@example.com", primary: true, optOut: false, invalid: false }]
+      }), { status: 200 });
+    }
+    if (path.endsWith("/Contact/contact-1")) return new Response(JSON.stringify({ id: "contact-1" }), { status: 200 });
+    if (path.endsWith("/CContactEmail") && !init?.method) return new Response(JSON.stringify({ list: [], total: 0 }), { status: 200 });
+    return new Response(JSON.stringify({ id: "email-record-1" }), { status: 201 });
+  });
+  const result = await new EspoCrmProvider("key", "https://crm.example.test", "cSuncoastCrmId").syncContactEmail("contact-1", {
+    id: "email-1",
+    tenantId: "suncoast",
+    entityId: "entity-1",
+    email: "secondary@example.com",
+    purpose: "notifications",
+    status: "verified",
+    isPrimary: false,
+    verifiedAt: "2026-10-26T17:30:00.000Z",
+    providerId: null
+  });
+  const contactUpdate = JSON.parse(String(requests[1].init?.body));
+  assert.deepEqual(contactUpdate.emailAddressData, [
+    { emailAddress: "primary@example.com", primary: true, optOut: false, invalid: false },
+    { emailAddress: "secondary@example.com", primary: false, optOut: false, invalid: false }
+  ]);
+  const projectionCreate = JSON.parse(String(requests[3].init?.body));
+  assert.equal(projectionCreate.cVerificationStatus, "Verified");
+  assert.equal(projectionCreate.cVerifiedAt, "2026-10-26 17:30:00");
+  assert.equal(projectionCreate.contactId, "contact-1");
+  assert.equal(result.providerId, "email-record-1");
+});
+
 test("EspoCRM adapter maps offset pagination to the stable cursor", async (t) => {
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ list: [{ id: "1" }, { id: "2" }], total: 5 }), { status: 200 }));
   const page = await new EspoCrmProvider("key", "https://crm.example.test", "cSuncoastCrmId").list("companies", { cursor: "2", limit: 2 });

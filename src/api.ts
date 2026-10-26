@@ -8,9 +8,10 @@ import { openApiSpec } from "./openapi.js";
 import { runOutbox, stopOutbox } from "./outbox.js";
 import { getEntity, getOperation, listEntities, queueOperation } from "./repository.js";
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
-import { aiBody, entityBody, externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, updateBody } from "./validation.js";
+import { aiBody, entityBody, externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, externalContactSubjectId, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
 import { createEmailVerification, emailVerificationBody, expireDueEmailVerifications, getEmailVerification } from "./email-verifications.js";
+import { resolveContactSubject } from "./contact-emails.js";
 
 const app = express();
 app.disable("x-powered-by"); app.use(helmet()); app.use(express.json({ limit: "1mb" }));
@@ -24,7 +25,7 @@ const tenant = () => config().CRM_TENANT_ID;
 const queuedResponse = (result: { id: string; status: string; duplicate: boolean }) => ({ operation_id: result.id, status: result.status, duplicate: result.duplicate, status_url: `${config().OPENAPI_SERVER_URL.replace(/\/$/, "")}/v1/operations/${result.id}` });
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records, to_regclass('crm_email_verifications') AS email_verifications"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records || !row?.email_verifications) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
+app.get("/readyz", async (_req, res) => { try { const result = await pool.query("SELECT to_regclass('crm_operations') AS operations, to_regclass('crm_outbox') AS outbox, to_regclass('crm_custom_object_definitions') AS custom_definitions, to_regclass('crm_custom_object_records') AS custom_records, to_regclass('crm_email_verifications') AS email_verifications, to_regclass('crm_contact_subjects') AS contact_subjects, to_regclass('crm_contact_emails') AS contact_emails"); const row = result.rows[0]; if (!row?.operations || !row?.outbox || !row?.custom_definitions || !row?.custom_records || !row?.email_verifications || !row?.contact_subjects || !row?.contact_emails) throw new Error("CRM schema is not migrated"); res.json({ ok: true }); } catch { res.status(503).json({ ok: false }); } });
 app.get("/openapi.json", (_req, res) => res.json(openApiSpec()));
 app.get("/v1/operations/:operationId", async (req, res) => { const value = await getOperation(tenant(), req.params.operationId!); value ? res.json(value) : res.status(404).json({ error: "Operation not found" }); });
 app.post("/v1/email-verifications", async (req, res) => { const h = headers(req); const body = emailVerificationBody.parse(req.body); const value = await createEmailVerification(body.email, body.purpose, h.idempotencyKey); res.status(value.duplicate ? 200 : 202).json(value); });
@@ -35,10 +36,12 @@ app.post("/v1/external-signups/contacts", async (req, res) => {
   const rawEmail = body.properties.email ?? body.properties.emailAddress;
   const email = emailVerificationBody.shape.email.parse(rawEmail);
   const properties = externalContactProperties(body.properties);
-  const entityId = randomUUID();
-  const contactIdempotencyKey = externalContactOperationIdempotencyKey(email, body.purpose, h.idempotencyKey);
+  const subjectId = externalContactSubjectId(body.subject_id, email);
+  const contact = await resolveContactSubject(h.tenantId, subjectId, email);
+  const entityId = contact.entityId;
+  const contactIdempotencyKey = externalContactOperationIdempotencyKey(subjectId, body.purpose, h.idempotencyKey);
   const result = await queueOperation({ ...h, idempotencyKey: contactIdempotencyKey, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties, associations: body.associations }, retryFailed: true });
-  const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, String(result.entityId ?? entityId));
+  const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, String(result.entityId ?? entityId), body.primary_email);
   res.status(202).json({ ...queuedResponse(result), entity_id: result.entityId, email_verification: verification });
 });
 app.get("/v1/custom-objects", async (_req, res) => res.json(await listCustomObjectDefinitions(tenant())));

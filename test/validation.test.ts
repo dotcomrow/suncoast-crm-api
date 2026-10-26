@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody } from "../src/validation.js";
+import { externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, externalContactSubjectId } from "../src/validation.js";
 
 test("external contact signups require a valid email", () => {
   assert.equal(externalContactSignupBody.safeParse({ properties: { firstname: "Pat" } }).success, false);
@@ -14,22 +14,23 @@ test("external contact signups accept the stable and native EspoCRM email names"
   assert.equal(native.purpose, "external-signup");
 });
 
-test("notification contact creation is idempotent per normalized email", () => {
-  const first = externalContactOperationIdempotencyKey(" User@Example.com ", "notifications", "request-one");
-  const replay = externalContactOperationIdempotencyKey("user@example.com", "notifications", "request-two");
+test("notification contact creation is idempotent per stable subject", () => {
+  const subject = "directus-user:user-1";
+  const first = externalContactOperationIdempotencyKey(subject, "notifications", "request-one");
+  const replay = externalContactOperationIdempotencyKey(subject, "notifications", "request-two");
   assert.equal(first, replay);
   assert.match(first, /^notification-contact:[a-f0-9]{32}$/);
-  assert.equal(externalContactOperationIdempotencyKey("user@example.com", "external-signup", "request-three"), "request-three");
+  assert.equal(externalContactOperationIdempotencyKey(subject, "external-signup", "request-three"), "request-three");
+  assert.equal(externalContactSubjectId(undefined, " User@Example.com "), "email:user@example.com");
+  assert.equal(externalContactSubjectId(subject, "other@example.com"), subject);
 });
 
 test("external contacts receive editable placeholder names when no name is supplied", () => {
   assert.deepEqual(externalContactProperties({ email: "user@example.com" }), {
-    email: "user@example.com",
     firstname: "Notification",
     lastname: "Subscriber"
   });
   assert.deepEqual(externalContactProperties({ email: "user@example.com", firstName: "Pat", lastName: "Lee" }), {
-    email: "user@example.com",
     firstName: "Pat",
     lastName: "Lee"
   });

@@ -98,8 +98,9 @@ spec:
                 fi
               done
 
-              # External signup confirmation state is stored on Contact so it
-              # is visible to CRM users and survives facade cache rebuilds.
+              # Preserve the legacy contact-wide confirmation fields for API
+              # compatibility. New confirmation state is stored per address
+              # on the related CContactEmail entity reconciled below.
               for field_spec in 'emailVerified|Email Verified|bool' 'emailVerifiedAt|Email Verified At|datetime'; do
                 field_name="${field_spec%%|*}"
                 field_tail="${field_spec#*|}"
@@ -121,20 +122,101 @@ spec:
                 fi
               done
 
+              # A Contact can own several email addresses. EspoCRM's native
+              # email field stores the addresses; this related entity stores
+              # the verification lifecycle for each individual address.
+              contact_email_entity="$(jq -r '.scopes.CContactEmail.entity // false' /tmp/metadata.json)"
+              if [ "$contact_email_entity" != true ]; then
+                entity_payload='{"name":"ContactEmail","type":"Base","labelSingular":"Contact Email","labelPlural":"Contact Emails","stream":false}'
+                request POST /EntityManager/action/createEntity /tmp/contact-email-entity.json "$entity_payload"
+                test "$(jq -r '.name // empty' /tmp/contact-email-entity.json)" = CContactEmail
+                request GET /Metadata /tmp/metadata.json
+                echo "Created CContactEmail"
+              else
+                echo "Preserving CContactEmail"
+              fi
+
+              for field_spec in \
+                'emailAddress|Email Address|varchar|320' \
+                'verifiedAt|Verified At|datetime|' \
+                'isPrimary|Primary|bool|' \
+                'purpose|Purpose|varchar|64' \
+                'suncoastEmailId|Suncoast Email ID|varchar|64'; do
+                field_name="${field_spec%%|*}"
+                field_tail="${field_spec#*|}"
+                field_label="${field_tail%%|*}"
+                field_tail="${field_tail#*|}"
+                field_type="${field_tail%%|*}"
+                field_length="${field_tail##*|}"
+                metadata_name="c$(printf '%s' "$field_name" | cut -c1 | tr '[:lower:]' '[:upper:]')$(printf '%s' "$field_name" | cut -c2-)"
+                existing_type="$(jq -r --arg name "$metadata_name" '.entityDefs.CContactEmail.fields[$name].type // empty' /tmp/metadata.json)"
+                if [ -z "$existing_type" ]; then
+                  field_payload="$(jq -cn \
+                    --arg fieldName "$field_name" --arg fieldLabel "$field_label" \
+                    --arg fieldType "$field_type" --argjson maxLength "${field_length:-null}" \
+                    '{name:$fieldName,label:$fieldLabel,type:$fieldType,required:false,audited:true}
+                    + if $maxLength == null then {} else {maxLength:$maxLength} end')"
+                  request POST /Admin/fieldManager/CContactEmail "/tmp/field-CContactEmail-$field_name.json" "$field_payload"
+                  test "$(jq -r '.type // empty' "/tmp/field-CContactEmail-$field_name.json")" = "$field_type"
+                  echo "Created CContactEmail.$metadata_name"
+                elif [ "$existing_type" != "$field_type" ]; then
+                  echo "CContactEmail.$metadata_name has unexpected type $existing_type" >&2
+                  exit 1
+                else
+                  echo "Preserving CContactEmail.$metadata_name"
+                fi
+              done
+
+              existing_status_type="$(jq -r '.entityDefs.CContactEmail.fields.cVerificationStatus.type // empty' /tmp/metadata.json)"
+              if [ -z "$existing_status_type" ]; then
+                status_payload='{"name":"verificationStatus","label":"Verification Status","type":"enum","options":["Pending","Verified","Expired"],"default":"Pending","required":true,"audited":true}'
+                request POST /Admin/fieldManager/CContactEmail /tmp/field-CContactEmail-verificationStatus.json "$status_payload"
+                test "$(jq -r '.type // empty' /tmp/field-CContactEmail-verificationStatus.json)" = enum
+                echo "Created CContactEmail.cVerificationStatus"
+              elif [ "$existing_status_type" != enum ]; then
+                echo "CContactEmail.cVerificationStatus has unexpected type $existing_status_type" >&2
+                exit 1
+              else
+                echo "Preserving CContactEmail.cVerificationStatus"
+              fi
+
+              request GET /Metadata /tmp/metadata.json
+              contact_email_link="$(jq -r '.entityDefs.Contact.links.contactEmails.entity // empty' /tmp/metadata.json)"
+              if [ -z "$contact_email_link" ]; then
+                link_payload='{"entity":"Contact","entityForeign":"CContactEmail","link":"contactEmails","linkForeign":"contact","label":"Contact Emails","labelForeign":"Contact","linkType":"oneToMany","linkMultipleField":true,"audited":false,"layout":"list"}'
+                request POST /EntityManager/action/createLink /tmp/contact-email-link.json "$link_payload"
+                request GET /Metadata /tmp/metadata.json
+                echo "Created Contact.contactEmails relationship"
+              elif [ "$contact_email_link" != CContactEmail ]; then
+                echo "Contact.contactEmails unexpectedly targets $contact_email_link" >&2
+                exit 1
+              else
+                echo "Preserving Contact.contactEmails relationship"
+              fi
+
+              request GET /CContactEmail/layout/detail /tmp/contact-email-detail-layout.json
+              contact_email_detail_layout="$(jq -c '
+                reduce ["cEmailAddress","cVerificationStatus","cVerifiedAt","cIsPrimary","cPurpose","contact"][] as $field
+                  (.;
+                   if ([.. | objects | select(.name? == $field)] | length) > 0 then .
+                   else .[0].rows += [[{"name":$field}]] end)
+              ' /tmp/contact-email-detail-layout.json)"
+              request PUT /CContactEmail/layout/detail /tmp/contact-email-detail-layout-updated.json "$contact_email_detail_layout"
+
+              request GET /CContactEmail/layout/list /tmp/contact-email-list-layout.json
+              contact_email_list_layout="$(jq -c '
+                reduce ["cEmailAddress","cVerificationStatus","cIsPrimary","cVerifiedAt"][] as $field
+                  (.; if ([.[] | select(.name? == $field)] | length) > 0 then . else . + [{"name":$field}] end)
+              ' /tmp/contact-email-list-layout.json)"
+              request PUT /CContactEmail/layout/list /tmp/contact-email-list-layout-updated.json "$contact_email_list_layout"
+
               request GET /Contact/layout/detail /tmp/contact-detail-layout.json
               detail_layout="$(jq -c '
-                if ([.. | objects | select(.name? == "cEmailVerified")] | length) > 0 then .
-                else .[0].rows += [[{"name":"cEmailVerified"},{"name":"cEmailVerifiedAt"}]] end
+                if ([.. | objects | select(.name? == "contactEmails")] | length) > 0 then .
+                else .[0].rows += [[{"name":"contactEmails"}]] end
               ' /tmp/contact-detail-layout.json)"
               request PUT /Contact/layout/detail /tmp/contact-detail-layout-updated.json "$detail_layout"
-
-              request GET /Contact/layout/list /tmp/contact-list-layout.json
-              list_layout="$(jq -c '
-                if ([.[] | select(.name? == "cEmailVerified")] | length) > 0 then .
-                else . + [{"name":"cEmailVerified"}] end
-              ' /tmp/contact-list-layout.json)"
-              request PUT /Contact/layout/list /tmp/contact-list-layout-updated.json "$list_layout"
-              echo "Reconciled Contact email-confirmation layouts"
+              echo "Reconciled per-address email-verification layouts"
 
               role_name="Suncoast CRM API"
               request GET '/Role?maxSize=200&select=id,name' /tmp/roles.json
@@ -142,6 +224,7 @@ spec:
               role_scopes='{
                 "Account":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
                 "Contact":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "CContactEmail":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
                 "Opportunity":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
                 "Task":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"}
               }'
@@ -166,6 +249,7 @@ spec:
               gui_scopes='{
                 "Account":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
                 "Contact":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
+                "CContactEmail":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
                 "Lead":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
                 "Opportunity":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},
                 "Task":{"create":"yes","read":"all","edit":"all","delete":"no","stream":"all"},

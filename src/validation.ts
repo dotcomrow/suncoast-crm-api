@@ -2,17 +2,22 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { entityTypes } from "./types.js";
 
-export function externalContactOperationIdempotencyKey(email: string, purpose: string, requestIdempotencyKey: string): string {
+export function externalContactSubjectId(subjectId: string | undefined, email: string): string {
+  const explicit = subjectId?.trim();
+  return explicit || `email:${email.trim().toLowerCase()}`;
+}
+
+export function externalContactOperationIdempotencyKey(subjectId: string, purpose: string, requestIdempotencyKey: string): string {
   if (purpose !== "notifications") return requestIdempotencyKey;
-  const normalizedEmail = email.trim().toLowerCase();
-  return `notification-contact:${createHash("sha256").update(normalizedEmail).digest("hex").slice(0, 32)}`;
+  return `notification-contact:${createHash("sha256").update(subjectId).digest("hex").slice(0, 32)}`;
 }
 
 export function externalContactProperties(properties: Record<string, unknown>): Record<string, unknown> {
   const firstName = properties.firstname ?? properties.firstName;
   const lastName = properties.lastname ?? properties.lastName;
+  const { email: _email, emailAddress: _emailAddress, email_verified: _emailVerified, email_verified_at: _emailVerifiedAt, ...identityProperties } = properties;
   return {
-    ...properties,
+    ...identityProperties,
     ...((typeof firstName !== "string" || !firstName.trim()) ? { firstname: "Notification" } : {}),
     ...((typeof lastName !== "string" || !lastName.trim()) ? { lastname: "Subscriber" } : {})
   };
@@ -23,7 +28,9 @@ export const entityBody = z.object({
   associations: z.record(z.string(), z.array(z.string())).default({})
 });
 export const externalContactSignupBody = entityBody.extend({
-  purpose: z.string().regex(/^[a-z][a-z0-9_-]{0,62}$/).default("external-signup")
+  purpose: z.string().regex(/^[a-z][a-z0-9_-]{0,62}$/).default("external-signup"),
+  subject_id: z.string().trim().min(1).max(512).optional(),
+  primary_email: z.boolean().default(false)
 }).superRefine((value, context) => {
   const email = value.properties.email ?? value.properties.emailAddress;
   const parsed = z.string().trim().email().max(320).safeParse(email);

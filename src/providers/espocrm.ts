@@ -1,8 +1,10 @@
 import type { CrmEntity, EntityType, ProviderWriteResult } from "../types.js";
 import type { CrmProvider, ListOptions } from "./provider.js";
 import { ProviderError } from "./provider.js";
+import type { ContactEmailState } from "../contact-emails.js";
 
 interface EspoRecord { id: string; [key: string]: unknown; }
+interface EspoEmailAddress { emailAddress: string; primary?: boolean; optOut?: boolean; invalid?: boolean; }
 
 const entityNames: Record<EntityType, string> = {
   contacts: "Contact",
@@ -85,6 +87,60 @@ export class EspoCrmProvider implements CrmProvider {
     });
     const page = await this.request<{ list?: EspoRecord[] }>(`${entityNames[type]}?${query}`);
     return page.list?.[0] ?? null;
+  }
+
+  private async findByField(entityType: string, field: string, value: string, select: string): Promise<EspoRecord | null> {
+    const query = new URLSearchParams({
+      maxSize: "1",
+      "where[0][type]": "equals",
+      "where[0][attribute]": field,
+      "where[0][value]": value,
+      select
+    });
+    const page = await this.request<{ list?: EspoRecord[] }>(`${entityType}?${query}`);
+    return page.list?.[0] ?? null;
+  }
+
+  async syncContactEmail(contactProviderId: string, email: ContactEmailState): Promise<ProviderWriteResult> {
+    const contact = await this.request<EspoRecord>(`Contact/${encodeURIComponent(contactProviderId)}`);
+    const current = Array.isArray(contact.emailAddressData)
+      ? contact.emailAddressData.filter((item): item is EspoEmailAddress => Boolean(item) && typeof item === "object" && typeof (item as EspoEmailAddress).emailAddress === "string")
+      : [];
+    const normalized = email.email.trim().toLowerCase();
+    const existing = current.find((item) => item.emailAddress.trim().toLowerCase() === normalized);
+    const emailAddressData = current
+      .filter((item) => item.emailAddress.trim().toLowerCase() !== normalized)
+      .map((item) => ({ ...item, primary: email.isPrimary ? false : item.primary === true }));
+    emailAddressData.push({
+      emailAddress: email.email,
+      primary: email.isPrimary,
+      optOut: existing?.optOut === true,
+      invalid: existing?.invalid === true
+    });
+    if (!emailAddressData.some((item) => item.primary)) emailAddressData[0]!.primary = true;
+    await this.request<EspoRecord>(`Contact/${encodeURIComponent(contactProviderId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ emailAddressData })
+    });
+
+    const existingProjection = await this.findByField("CContactEmail", "cSuncoastEmailId", email.id, "id,cSuncoastEmailId");
+    const verifiedAt = email.verifiedAt
+      ? new Date(email.verifiedAt).toISOString().slice(0, 19).replace("T", " ")
+      : null;
+    const projection = {
+      name: email.email,
+      cEmailAddress: email.email,
+      cVerificationStatus: email.status[0]!.toUpperCase() + email.status.slice(1),
+      cVerifiedAt: verifiedAt,
+      cIsPrimary: email.isPrimary,
+      cPurpose: email.purpose,
+      cSuncoastEmailId: email.id,
+      contactId: contactProviderId
+    };
+    const record = existingProjection
+      ? await this.request<EspoRecord>(`CContactEmail/${encodeURIComponent(existingProjection.id)}`, { method: "PUT", body: JSON.stringify(projection) })
+      : await this.request<EspoRecord>("CContactEmail", { method: "POST", body: JSON.stringify(projection) });
+    return this.result(record);
   }
 
   async create(type: EntityType, entity: CrmEntity): Promise<ProviderWriteResult> {

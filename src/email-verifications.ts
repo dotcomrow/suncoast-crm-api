@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "./config.js";
 import { inTransaction, pool } from "./db.js";
+import { upsertContactEmail } from "./contact-emails.js";
 
 export const emailVerificationBody = z.object({
   email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
@@ -9,7 +10,7 @@ export const emailVerificationBody = z.object({
 });
 
 function response(row: Record<string, unknown>) {
-  return { id: row.id, validation_id: row.id, entity_id: row.entity_id ?? null, email: row.email, purpose: row.purpose, status: row.status, expires_at: row.expires_at, verified_at: row.verified_at, created_at: row.created_at };
+  return { id: row.id, validation_id: row.id, entity_id: row.entity_id ?? null, contact_email_id: row.contact_email_id ?? null, email: row.email, purpose: row.purpose, status: row.status, expires_at: row.expires_at, verified_at: row.verified_at, created_at: row.created_at };
 }
 
 async function queueConfirmationEmail(email: string, url: string, id: string): Promise<void> {
@@ -35,7 +36,7 @@ async function queueConfirmationEmail(email: string, url: string, id: string): P
   if (!result.ok) throw Object.assign(new Error(`Notification service rejected confirmation email with HTTP ${result.status}`), { status: 502 });
 }
 
-export async function createEmailVerification(email: string, purpose: string, idempotencyKey: string, entityId?: string) {
+export async function createEmailVerification(email: string, purpose: string, idempotencyKey: string, entityId?: string, primary = false) {
   const cfg = config();
   if (!cfg.EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED) throw Object.assign(new Error("External signup email verification is disabled"), { status: 503 });
   const code = randomBytes(32).toString("base64url");
@@ -54,9 +55,25 @@ export async function createEmailVerification(email: string, purpose: string, id
       if (!row || row.email !== email || row.purpose !== purpose) throw Object.assign(new Error("Idempotency-Key was already used for a different request"), { status: 409 });
       return { ...response(row), duplicate: true };
     }
+    let verification = inserted.rows[0];
+    if (entityId) {
+      const contactEmail = await upsertContactEmail(client, {
+        tenantId: cfg.CRM_TENANT_ID,
+        entityId,
+        email,
+        purpose,
+        verificationId: id,
+        primary
+      });
+      const linked = await client.query(
+        "UPDATE crm_email_verifications SET contact_email_id=$3 WHERE tenant_id=$1 AND id=$2 RETURNING *",
+        [cfg.CRM_TENANT_ID, id, contactEmail.id]
+      );
+      verification = linked.rows[0];
+    }
     const url = `${cfg.EMAIL_CONFIRMATION_PUBLIC_URL}?code=${encodeURIComponent(code)}`;
     await queueConfirmationEmail(email, url, id);
-    return { ...response(inserted.rows[0]), duplicate: false };
+    return { ...response(verification), duplicate: false };
   });
 }
 
@@ -73,10 +90,17 @@ export async function expireDueEmailVerifications(verificationId?: string): Prom
        SET status='expired',updated_at=now()
        WHERE tenant_id=$1 AND status='pending' AND expires_at <= now()
          AND ($2::uuid IS NULL OR id=$2::uuid)
-       RETURNING id,email,entity_id,updated_at`,
+       RETURNING id,email,entity_id,contact_email_id,updated_at`,
       [config().CRM_TENANT_ID, verificationId ?? null]
     );
     for (const row of expired.rows) {
+      if (row.contact_email_id) {
+        await client.query(
+          `UPDATE crm_contact_emails SET status='expired',updated_at=$4
+           WHERE tenant_id=$1 AND id=$2 AND current_verification_id=$3 AND status='pending'`,
+          [config().CRM_TENANT_ID, row.contact_email_id, row.id, row.updated_at]
+        );
+      }
       await client.query(
         "INSERT INTO crm_outbox (id,aggregate_id,topic,message_key,payload) VALUES ($1,$2,$3,$4,$5)",
         [randomUUID(), row.id, config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC, row.id, {

@@ -1,5 +1,6 @@
 import type { CrmEntity, EntityType, ProviderWriteResult } from "../types.js";
 import type { CustomFieldDefinition, CustomObjectDefinition, CustomObjectDefinitionInput } from "../custom-objects.js";
+import type { ContactEmailState } from "../contact-emails.js";
 
 export interface ListOptions { cursor?: string; limit: number; }
 
@@ -10,6 +11,7 @@ export interface CrmProvider {
   delete(type: EntityType, providerId: string): Promise<void>;
   get(type: EntityType, providerId: string): Promise<ProviderWriteResult | null>;
   list(type: EntityType, options: ListOptions): Promise<{ items: ProviderWriteResult[]; nextCursor?: string }>;
+  syncContactEmail?(contactProviderId: string, email: ContactEmailState): Promise<ProviderWriteResult>;
   defineCustomObject?(definition: CustomObjectDefinitionInput): Promise<{ objectType: string; raw: Record<string, unknown> }>;
   addCustomObjectFields?(definition: CustomObjectDefinition, fields: CustomFieldDefinition[]): Promise<void>;
   defineContactPropertyProjection?(definition: CustomObjectDefinitionInput): Promise<Record<string, unknown>>;

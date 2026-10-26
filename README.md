@@ -13,20 +13,23 @@ The OpenAPI contract is available at `/crm/openapi.json` when routed through the
 External signup integrations use `POST /v1/external-signups/contacts`. This
 explicit endpoint queues the provider-neutral contact creation immediately and
 sends a linked one-time confirmation link to `properties.email` (or the native
-`properties.emailAddress` alias). For the `notifications` purpose, contact
-creation is idempotent per normalized email while verification attempts retain
-their own idempotency keys. Callers may set `email_verified=false` so the
-provider record visibly distinguishes pending confirmation. Generic
+`properties.emailAddress` alias). Callers should supply a stable `subject_id`
+for the person. Reusing that subject attaches additional addresses to the same
+contact; omitting it falls back to an email-scoped identity. For the
+`notifications` purpose, contact creation is idempotent per stable subject while
+verification attempts retain their own idempotency keys. `primary_email=true`
+explicitly promotes an address; otherwise the first address stays primary. Generic
 `POST /v1/contacts` remains suitable for internal integrations and does not send
 email automatically.
 The deployment manifest enables this external-only workflow with
 `EXTERNAL_SIGNUP_EMAIL_VERIFICATION_ENABLED=true`.
 
-Successful confirmation updates the associated Contact with the provider-neutral
-`email_verified` and `email_verified_at` properties. The EspoCRM adapter maps
-these to the deployment-managed `cEmailVerified` and `cEmailVerifiedAt` fields;
-the bootstrap job also places both fields on the Contact detail layout and the
-boolean indicator on the Contact list layout.
+Each address has independent pending, verified, or expired state. The EspoCRM
+adapter merges it into the Contact's native multi-address email field without
+dropping existing addresses and writes the verification state to a related
+`CContactEmail` record. The local contact representation exposes all entries in
+`email_addresses`; the legacy scalar email and verification properties describe
+the primary address only.
 
 ## EspoCRM provider
 

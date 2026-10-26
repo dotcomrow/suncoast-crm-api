@@ -9,8 +9,8 @@ import { kafka } from "./kafka.js";
 import { providerFor } from "./providers/registry.js";
 import { queueOperation } from "./repository.js";
 import { externalContactProperties } from "./validation.js";
-import type { CrmEntity } from "./types.js";
 import type { PoolClient } from "pg";
+import { getContactEmailForVerification, listContactEmails, setContactEmailProjection } from "./contact-emails.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -29,48 +29,57 @@ const emailValidationEventSchema = z.object({
 });
 let shuttingDown = false;
 
-async function syncContactIndicator(client: PoolClient, verification: Record<string, unknown>, verifiedAt: string): Promise<string | null> {
-  const entityResult = verification.entity_id
-    ? await client.query("SELECT * FROM crm_entities WHERE tenant_id=$1 AND id=$2 AND entity_type='contacts' AND deleted_at IS NULL", [config().CRM_TENANT_ID, verification.entity_id])
-    : await client.query(
-      `SELECT * FROM crm_entities
-       WHERE tenant_id=$1 AND entity_type='contacts' AND deleted_at IS NULL
-         AND lower(COALESCE(properties->>'email',properties->>'emailAddress',''))=lower($2)
-       ORDER BY created_at DESC LIMIT 2`, [config().CRM_TENANT_ID, verification.email]
-    );
-  if (!verification.entity_id && entityResult.rowCount !== 1) return null;
+async function syncContactEmailProjection(client: PoolClient, verification: Record<string, unknown>): Promise<string | null> {
+  const contactEmail = await getContactEmailForVerification(client, config().CRM_TENANT_ID, String(verification.id));
+  if (!contactEmail) return null;
+  const entityResult = await client.query(
+    "SELECT * FROM crm_entities WHERE tenant_id=$1 AND id=$2 AND entity_type='contacts' AND deleted_at IS NULL FOR UPDATE",
+    [config().CRM_TENANT_ID, contactEmail.entityId]
+  );
   const entityRow = entityResult.rows[0];
-  if (!entityRow?.provider_id) throw new Error("The contact is not ready for confirmation; retry shortly");
-  if (entityRow.properties?.email_verified === true && entityRow.properties?.email_verified_at === verifiedAt) return entityRow.id as string;
-  const properties = { ...(entityRow.properties ?? {}), email_verified: true, email_verified_at: verifiedAt };
-  const entity: CrmEntity = {
-    id: entityRow.id, type: "contacts", provider: entityRow.provider, providerId: entityRow.provider_id,
-    properties, associations: entityRow.associations ?? {}, version: Number(entityRow.version),
-    createdAt: entityRow.created_at, updatedAt: verifiedAt
+  if (!entityRow?.provider_id) throw new Error("The contact is not ready for email projection; retry shortly");
+  const provider = providerFor(entityRow.provider);
+  if (!provider.syncContactEmail) throw new Error(`Provider ${entityRow.provider} does not support per-address email projection`);
+  const written = await provider.syncContactEmail(entityRow.provider_id, contactEmail);
+  await setContactEmailProjection(client, config().CRM_TENANT_ID, contactEmail.id, written.providerId);
+  const emails = await listContactEmails(client, config().CRM_TENANT_ID, contactEmail.entityId);
+  const primary = emails.find((candidate) => candidate.isPrimary) ?? emails[0];
+  const properties = {
+    ...(entityRow.properties ?? {}),
+    email_addresses: emails.map((candidate) => ({
+      id: candidate.id,
+      email: candidate.email,
+      primary: candidate.isPrimary,
+      status: candidate.status,
+      verified_at: candidate.verifiedAt
+    })),
+    ...(primary ? {
+      email: primary.email,
+      email_verified: primary.status === "verified",
+      email_verified_at: primary.verifiedAt
+    } : {})
   };
-  await providerFor(entityRow.provider).update("contacts", entityRow.provider_id, entity);
   await client.query(
-    "UPDATE crm_entities SET properties=$2,version=version+1,updated_at=$3 WHERE tenant_id=$1 AND id=$4",
-    [config().CRM_TENANT_ID, properties, verifiedAt, entityRow.id]
+    "UPDATE crm_entities SET properties=$2,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$3",
+    [config().CRM_TENANT_ID, properties, entityRow.id]
   );
   await cacheDelete(entityCacheKey(config().CRM_TENANT_ID, "contacts", entityRow.id));
   return entityRow.id as string;
 }
 
-async function reconcileVerifiedContactIndicators(): Promise<void> {
-  const verified = await pool.query(
-    `SELECT id FROM (
-       SELECT id,entity_id,verified_at,
-         row_number() OVER (PARTITION BY lower(email) ORDER BY verified_at DESC NULLS LAST,created_at DESC) AS email_rank
-       FROM crm_email_verifications WHERE tenant_id=$1 AND status='verified'
-     ) verified WHERE entity_id IS NOT NULL OR email_rank=1 ORDER BY verified_at`,
+async function reconcileContactEmailProjections(): Promise<void> {
+  const candidates = await pool.query(
+    `SELECT current_verification_id AS id FROM crm_contact_emails
+     WHERE tenant_id=$1 AND current_verification_id IS NOT NULL
+       AND (projected_at IS NULL OR projected_at < updated_at)
+     ORDER BY updated_at`,
     [config().CRM_TENANT_ID]
   );
-  for (const candidate of verified.rows) {
+  for (const candidate of candidates.rows) {
     try {
-      await reconcileVerifiedContactIndicator(candidate.id);
+      await reconcileContactEmailProjection(candidate.id);
     } catch (error) {
-      console.error(`Verified Contact indicator reconciliation failed for ${candidate.id}`, error);
+      console.error(`Contact email projection failed for ${candidate.id}`, error);
     }
   }
 }
@@ -112,15 +121,15 @@ async function recoverMissingNameContactOperations(): Promise<void> {
   }
 }
 
-async function reconcileVerifiedContactIndicator(verificationId: string): Promise<void> {
+async function reconcileContactEmailProjection(verificationId: string): Promise<void> {
   await inTransaction(async (client) => {
     const selected = await client.query(
-      "SELECT * FROM crm_email_verifications WHERE tenant_id=$1 AND id=$2 AND status='verified' FOR UPDATE",
+      "SELECT * FROM crm_email_verifications WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
       [config().CRM_TENANT_ID, verificationId]
     );
     const row = selected.rows[0];
-    if (!row?.verified_at) return;
-    const entityId = await syncContactIndicator(client, row, new Date(row.verified_at).toISOString());
+    if (!row) return;
+    const entityId = await syncContactEmailProjection(client, row);
     if (entityId && !row.entity_id) {
       await client.query(
         "UPDATE crm_email_verifications SET entity_id=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2",
@@ -153,10 +162,17 @@ app.post(confirmationPaths, async (req, res) => {
       const verifiedAt = new Date().toISOString();
       const updated = await client.query(
         `UPDATE crm_email_verifications SET status='verified',verified_at=$3,updated_at=$3
-         WHERE tenant_id=$1 AND id=$2 RETURNING id,email,entity_id,verified_at`,
+         WHERE tenant_id=$1 AND id=$2 RETURNING id,email,entity_id,contact_email_id,verified_at`,
         [config().CRM_TENANT_ID, row.id, verifiedAt]
       );
       const verified = updated.rows[0];
+      if (verified.contact_email_id) {
+        await client.query(
+          `UPDATE crm_contact_emails SET status='verified',verified_at=$4,updated_at=$4
+           WHERE tenant_id=$1 AND id=$2 AND current_verification_id=$3`,
+          [config().CRM_TENANT_ID, verified.contact_email_id, verified.id, verifiedAt]
+        );
+      }
       await client.query(
         "INSERT INTO crm_outbox (id,aggregate_id,topic,message_key,payload) VALUES ($1,$2,$3,$4,$5)",
         [randomUUID(), verified.id, config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC, verified.id, {
@@ -182,9 +198,9 @@ const consumer = kafka().consumer({ groupId: config().KAFKA_EMAIL_VALIDATION_CON
 async function reconcileSafely(): Promise<void> {
   try {
     await recoverMissingNameContactOperations();
-    await reconcileVerifiedContactIndicators();
+    await reconcileContactEmailProjections();
   } catch (error) {
-    console.error("Verified Contact indicator reconciliation sweep failed", error);
+    console.error("Contact email projection sweep failed", error);
   }
 }
 
@@ -203,13 +219,12 @@ async function runEmailValidationConsumer(): Promise<void> {
             console.error("Ignoring malformed email-validation event", parsed.error.message);
             return;
           }
-          if (parsed.data.type !== "crm.email-validation.validated") return;
           try {
-            await reconcileVerifiedContactIndicator(parsed.data.validationId);
+            await reconcileContactEmailProjection(parsed.data.validationId);
           } catch (error) {
             // Commit the event and let the periodic database sweep retry it. This
             // prevents one permanently bad contact from blocking the partition.
-            console.error(`Email-validation projection deferred for ${parsed.data.validationId}`, error);
+            console.error(`Email-address projection deferred for ${parsed.data.validationId}`, error);
           }
         }
       });
