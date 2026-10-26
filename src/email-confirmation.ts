@@ -8,7 +8,7 @@ import { inTransaction, pool } from "./db.js";
 import { kafka } from "./kafka.js";
 import { providerFor } from "./providers/registry.js";
 import { queueOperation } from "./repository.js";
-import { externalContactProperties } from "./validation.js";
+import { externalContactProperties, externalContactSubjectId } from "./validation.js";
 import type { PoolClient } from "pg";
 import { getContactEmailForVerification, listContactEmails, setContactEmailProjection } from "./contact-emails.js";
 
@@ -84,17 +84,25 @@ async function reconcileContactEmailProjections(): Promise<void> {
   }
 }
 
-async function recoverMissingNameContactOperations(): Promise<void> {
+async function recoverFailedNotificationContactOperations(): Promise<void> {
   const failed = await pool.query(
     `SELECT DISTINCT ON (op.id)
-       op.id,op.provider,op.entity_id,op.idempotency_key,op.request,verification.id AS verification_id
+       op.id,op.provider,op.entity_id,op.idempotency_key,op.request,
+       verification.id AS verification_id,verification.email,
+       (SELECT subject.subject_id FROM crm_contact_subjects subject
+        WHERE subject.tenant_id=op.tenant_id AND subject.entity_id=op.entity_id
+        ORDER BY (subject.subject_id LIKE 'directus-user:%') DESC,subject.created_at
+        LIMIT 1) AS subject_id
      FROM crm_operations op
      JOIN crm_email_verifications verification
        ON verification.tenant_id=op.tenant_id AND verification.entity_id=op.entity_id
      WHERE op.tenant_id=$1
        AND op.action='create' AND op.entity_type='contacts' AND op.status='failed'
        AND verification.purpose='notifications' AND verification.status IN ('pending','verified')
-       AND op.error ILIKE '%lastName%' AND op.error ILIKE '%required%'
+       AND (
+         (op.error ILIKE '%lastName%' AND op.error ILIKE '%required%')
+         OR (op.error LIKE 'Error: EspoCRM 409:%' AND op.request->'properties'->>'lastname'='Subscriber')
+       )
      ORDER BY op.id,verification.created_at DESC`,
     [config().CRM_TENANT_ID]
   );
@@ -109,12 +117,18 @@ async function recoverMissingNameContactOperations(): Promise<void> {
         action: "create",
         entityType: "contacts",
         entityId: candidate.entity_id,
-        payload: { properties: externalContactProperties(rawProperties), associations: rawAssociations },
+        payload: {
+          properties: externalContactProperties(
+            { ...rawProperties, email: candidate.email },
+            candidate.subject_id ?? externalContactSubjectId(undefined, candidate.email)
+          ),
+          associations: rawAssociations
+        },
         idempotencyKey: candidate.idempotency_key,
         correlationId: `email-verification-recovery:${candidate.verification_id}`,
         retryFailed: true
       });
-      console.log(`Requeued Contact operation ${candidate.id} after adding placeholder names`);
+      console.log(`Requeued Contact operation ${candidate.id} with a unique stable placeholder name`);
     } catch (error) {
       console.error(`Failed to recover Contact operation ${candidate.id}`, error);
     }
@@ -197,7 +211,7 @@ const consumer = kafka().consumer({ groupId: config().KAFKA_EMAIL_VALIDATION_CON
 
 async function reconcileSafely(): Promise<void> {
   try {
-    await recoverMissingNameContactOperations();
+    await recoverFailedNotificationContactOperations();
     await reconcileContactEmailProjections();
   } catch (error) {
     console.error("Contact email projection sweep failed", error);

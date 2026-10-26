@@ -148,7 +148,7 @@ spec:
                 field_tail="${field_tail#*|}"
                 field_type="${field_tail%%|*}"
                 field_length="${field_tail##*|}"
-                metadata_name="c$(printf '%s' "$field_name" | cut -c1 | tr '[:lower:]' '[:upper:]')$(printf '%s' "$field_name" | cut -c2-)"
+                metadata_name="$field_name"
                 existing_type="$(jq -r --arg name "$metadata_name" '.entityDefs.CContactEmail.fields[$name].type // empty' /tmp/metadata.json)"
                 if [ -z "$existing_type" ]; then
                   field_payload="$(jq -cn \
@@ -167,36 +167,45 @@ spec:
                 fi
               done
 
-              existing_status_type="$(jq -r '.entityDefs.CContactEmail.fields.cVerificationStatus.type // empty' /tmp/metadata.json)"
+              existing_status_type="$(jq -r '.entityDefs.CContactEmail.fields.verificationStatus.type // empty' /tmp/metadata.json)"
               if [ -z "$existing_status_type" ]; then
                 status_payload='{"name":"verificationStatus","label":"Verification Status","type":"enum","options":["Pending","Verified","Expired"],"default":"Pending","required":true,"audited":true}'
                 request POST /Admin/fieldManager/CContactEmail /tmp/field-CContactEmail-verificationStatus.json "$status_payload"
                 test "$(jq -r '.type // empty' /tmp/field-CContactEmail-verificationStatus.json)" = enum
-                echo "Created CContactEmail.cVerificationStatus"
+                echo "Created CContactEmail.verificationStatus"
               elif [ "$existing_status_type" != enum ]; then
-                echo "CContactEmail.cVerificationStatus has unexpected type $existing_status_type" >&2
+                echo "CContactEmail.verificationStatus has unexpected type $existing_status_type" >&2
                 exit 1
               else
-                echo "Preserving CContactEmail.cVerificationStatus"
+                echo "Preserving CContactEmail.verificationStatus"
               fi
 
               request GET /Metadata /tmp/metadata.json
-              contact_email_link="$(jq -r '.entityDefs.Contact.links.contactEmails.entity // empty' /tmp/metadata.json)"
+              contact_email_link="$(jq -r '.entityDefs.Contact.links.cContactEmails.entity // empty' /tmp/metadata.json)"
               if [ -z "$contact_email_link" ]; then
                 link_payload='{"entity":"Contact","entityForeign":"CContactEmail","link":"contactEmails","linkForeign":"contact","label":"Contact Emails","labelForeign":"Contact","linkType":"oneToMany","linkMultipleField":true,"audited":false,"layout":"list"}'
                 request POST /EntityManager/action/createLink /tmp/contact-email-link.json "$link_payload"
                 request GET /Metadata /tmp/metadata.json
-                echo "Created Contact.contactEmails relationship"
+                echo "Created Contact.cContactEmails relationship"
               elif [ "$contact_email_link" != CContactEmail ]; then
-                echo "Contact.contactEmails unexpectedly targets $contact_email_link" >&2
+                echo "Contact.cContactEmails unexpectedly targets $contact_email_link" >&2
                 exit 1
               else
-                echo "Preserving Contact.contactEmails relationship"
+                echo "Preserving Contact.cContactEmails relationship"
               fi
 
               request GET /CContactEmail/layout/detail /tmp/contact-email-detail-layout.json
               contact_email_detail_layout="$(jq -c '
-                reduce ["cEmailAddress","cVerificationStatus","cVerifiedAt","cIsPrimary","cPurpose","contact"][] as $field
+                walk(if type == "object" then
+                  if .name? == "cEmailAddress" then .name = "emailAddress"
+                  elif .name? == "cVerificationStatus" then .name = "verificationStatus"
+                  elif .name? == "cVerifiedAt" then .name = "verifiedAt"
+                  elif .name? == "cIsPrimary" then .name = "isPrimary"
+                  elif .name? == "cPurpose" then .name = "purpose"
+                  else . end
+                else . end)
+                |
+                reduce ["emailAddress","verificationStatus","verifiedAt","isPrimary","purpose","contact"][] as $field
                   (.;
                    if ([.. | objects | select(.name? == $field)] | length) > 0 then .
                    else .[0].rows += [[{"name":$field}]] end)
@@ -205,15 +214,25 @@ spec:
 
               request GET /CContactEmail/layout/list /tmp/contact-email-list-layout.json
               contact_email_list_layout="$(jq -c '
-                reduce ["cEmailAddress","cVerificationStatus","cIsPrimary","cVerifiedAt"][] as $field
+                walk(if type == "object" then
+                  if .name? == "cEmailAddress" then .name = "emailAddress"
+                  elif .name? == "cVerificationStatus" then .name = "verificationStatus"
+                  elif .name? == "cVerifiedAt" then .name = "verifiedAt"
+                  elif .name? == "cIsPrimary" then .name = "isPrimary"
+                  else . end
+                else . end)
+                |
+                reduce ["emailAddress","verificationStatus","isPrimary","verifiedAt"][] as $field
                   (.; if ([.[] | select(.name? == $field)] | length) > 0 then . else . + [{"name":$field}] end)
               ' /tmp/contact-email-list-layout.json)"
               request PUT /CContactEmail/layout/list /tmp/contact-email-list-layout-updated.json "$contact_email_list_layout"
 
               request GET /Contact/layout/detail /tmp/contact-detail-layout.json
               detail_layout="$(jq -c '
-                if ([.. | objects | select(.name? == "contactEmails")] | length) > 0 then .
-                else .[0].rows += [[{"name":"contactEmails"}]] end
+                walk(if type == "object" and .name? == "contactEmails" then .name = "cContactEmails" else . end)
+                |
+                if ([.. | objects | select(.name? == "cContactEmails")] | length) > 0 then .
+                else .[0].rows += [[{"name":"cContactEmails"}]] end
               ' /tmp/contact-detail-layout.json)"
               request PUT /Contact/layout/detail /tmp/contact-detail-layout-updated.json "$detail_layout"
               echo "Reconciled per-address email-verification layouts"

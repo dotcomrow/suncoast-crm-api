@@ -25,12 +25,20 @@ test("notification contact creation is idempotent per stable subject", () => {
   assert.equal(externalContactSubjectId(subject, "other@example.com"), subject);
 });
 
-test("external contacts receive editable placeholder names when no name is supplied", () => {
-  assert.deepEqual(externalContactProperties({ email: "user@example.com" }), {
+test("external contacts receive stable unique placeholder names when no name is supplied", () => {
+  assert.deepEqual(externalContactProperties({ email: "user@example.com" }, "email:user@example.com"), {
     firstname: "Notification",
-    lastname: "Subscriber"
+    lastname: "user"
   });
-  assert.deepEqual(externalContactProperties({ email: "user@example.com", firstName: "Pat", lastName: "Lee" }), {
+  assert.deepEqual(externalContactProperties({ email: "user@example.com", firstname: "Notification", lastname: "Subscriber" }, "email:user@example.com"), {
+    firstname: "Notification",
+    lastname: "user"
+  });
+  assert.deepEqual(externalContactProperties({ email: "other@example.com" }, "directus-user:user-1"), {
+    firstname: "Notification",
+    lastname: "Subscriber-c64a7289bd"
+  });
+  assert.deepEqual(externalContactProperties({ email: "user@example.com", firstName: "Pat", lastName: "Lee" }, "email:user@example.com"), {
     firstName: "Pat",
     lastName: "Lee"
   });

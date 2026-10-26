@@ -123,18 +123,18 @@ export class EspoCrmProvider implements CrmProvider {
       body: JSON.stringify({ emailAddressData })
     });
 
-    const existingProjection = await this.findByField("CContactEmail", "cSuncoastEmailId", email.id, "id,cSuncoastEmailId");
+    const existingProjection = await this.findByField("CContactEmail", "suncoastEmailId", email.id, "id,suncoastEmailId");
     const verifiedAt = email.verifiedAt
       ? new Date(email.verifiedAt).toISOString().slice(0, 19).replace("T", " ")
       : null;
     const projection = {
       name: email.email,
-      cEmailAddress: email.email,
-      cVerificationStatus: email.status[0]!.toUpperCase() + email.status.slice(1),
-      cVerifiedAt: verifiedAt,
-      cIsPrimary: email.isPrimary,
-      cPurpose: email.purpose,
-      cSuncoastEmailId: email.id,
+      emailAddress: email.email,
+      verificationStatus: email.status[0]!.toUpperCase() + email.status.slice(1),
+      verifiedAt,
+      isPrimary: email.isPrimary,
+      purpose: email.purpose,
+      suncoastEmailId: email.id,
       contactId: contactProviderId
     };
     const record = existingProjection

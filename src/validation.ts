@@ -12,14 +12,26 @@ export function externalContactOperationIdempotencyKey(subjectId: string, purpos
   return `notification-contact:${createHash("sha256").update(subjectId).digest("hex").slice(0, 32)}`;
 }
 
-export function externalContactProperties(properties: Record<string, unknown>): Record<string, unknown> {
+function fallbackContactLastName(subjectId: string | undefined, email: unknown): string {
+  if (subjectId?.startsWith("email:") || !subjectId) {
+    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+    const localPart = normalizedEmail.split("@", 1)[0]?.trim();
+    if (localPart) return localPart.slice(0, 100);
+  }
+  const stableSubject = subjectId ?? `email:${String(email ?? "unknown").trim().toLowerCase()}`;
+  return `Subscriber-${createHash("sha256").update(stableSubject).digest("hex").slice(0, 10)}`;
+}
+
+export function externalContactProperties(properties: Record<string, unknown>, subjectId?: string): Record<string, unknown> {
   const firstName = properties.firstname ?? properties.firstName;
   const lastName = properties.lastname ?? properties.lastName;
+  const email = properties.email ?? properties.emailAddress;
+  const syntheticNotificationName = firstName === "Notification" && lastName === "Subscriber";
   const { email: _email, emailAddress: _emailAddress, email_verified: _emailVerified, email_verified_at: _emailVerifiedAt, ...identityProperties } = properties;
   return {
     ...identityProperties,
     ...((typeof firstName !== "string" || !firstName.trim()) ? { firstname: "Notification" } : {}),
-    ...((typeof lastName !== "string" || !lastName.trim()) ? { lastname: "Subscriber" } : {})
+    ...((typeof lastName !== "string" || !lastName.trim() || syntheticNotificationName) ? { lastname: fallbackContactLastName(subjectId, email) } : {})
   };
 }
 

@@ -88,9 +88,14 @@ test("EspoCRM adapter preserves multiple native emails and projects per-address 
     { emailAddress: "primary@example.com", primary: true, optOut: false, invalid: false },
     { emailAddress: "secondary@example.com", primary: false, optOut: false, invalid: false }
   ]);
+  const projectionSearch = new URL(requests[2].url);
+  assert.equal(projectionSearch.searchParams.get("where[0][attribute]"), "suncoastEmailId");
+  assert.equal(projectionSearch.searchParams.get("select"), "id,suncoastEmailId");
   const projectionCreate = JSON.parse(String(requests[3].init?.body));
-  assert.equal(projectionCreate.cVerificationStatus, "Verified");
-  assert.equal(projectionCreate.cVerifiedAt, "2026-10-26 17:30:00");
+  assert.equal(projectionCreate.emailAddress, "secondary@example.com");
+  assert.equal(projectionCreate.verificationStatus, "Verified");
+  assert.equal(projectionCreate.verifiedAt, "2026-10-26 17:30:00");
+  assert.equal(projectionCreate.suncoastEmailId, "email-1");
   assert.equal(projectionCreate.contactId, "contact-1");
   assert.equal(result.providerId, "email-record-1");
 });
