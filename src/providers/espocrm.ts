@@ -76,8 +76,13 @@ export class EspoCrmProvider implements CrmProvider {
   }
 
   private async findByIdempotencyKey(type: EntityType, value: string): Promise<EspoRecord | null> {
-    const where = JSON.stringify([{ type: "equals", attribute: this.idempotencyField, value }]);
-    const query = new URLSearchParams({ maxSize: "1", where, select: `id,${this.idempotencyField}` });
+    const query = new URLSearchParams({
+      maxSize: "1",
+      "where[0][type]": "equals",
+      "where[0][attribute]": this.idempotencyField,
+      "where[0][value]": value,
+      select: `id,${this.idempotencyField}`
+    });
     const page = await this.request<{ list?: EspoRecord[] }>(`${entityNames[type]}?${query}`);
     return page.list?.[0] ?? null;
   }
