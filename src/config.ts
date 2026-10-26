@@ -31,6 +31,7 @@ const env = z.object({
   KAFKA_EMAIL_VALIDATION_EVENT_TOPIC: z.string().default("crm.email-validation.events.v1"),
   PLATFORM_NOTIFICATION_SERVICE_URL: z.string().url().default("http://platform-notification-service.directus.svc.cluster.local:8080"),
   PLATFORM_NOTIFICATION_TOKEN: z.string().min(32).optional(),
+  CONTACT_PURGE_TOKEN: z.string().min(32).optional(),
   KAFKA_DLQ_TOPIC: z.string().default("crm.commands.dlq.v1"),
   KAFKA_SECURITY_PROTOCOL: z.enum(["PLAINTEXT", "SASL_PLAINTEXT", "SASL_SSL"]).default("SASL_PLAINTEXT"),
   KAFKA_SASL_MECHANISM: z.enum(["plain", "scram-sha-256", "scram-sha-512"]).default("scram-sha-256"),

@@ -88,6 +88,23 @@ spec:
                 fi
               }
 
+              ensure_generated_field() {
+                path="$1"
+                field="$2"
+                current="$(vault kv get -field="$field" "$path" 2>/dev/null || true)"
+                if [ -n "$current" ]; then
+                  echo "Preserving existing Vault field ${field} at ${path}"
+                else
+                  generated="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)"
+                  if vault kv get -format=json "$path" >/dev/null 2>&1; then
+                    vault kv patch "$path" "$field=$generated" >/dev/null
+                  else
+                    vault kv put "$path" "$field=$generated" >/dev/null
+                  fi
+                  echo "Generated durable Vault field ${field} at ${path}"
+                fi
+              }
+
               BASE="secret/kafka-scram-user-suncoast-crm-api"
               ensure_value "$BASE" "suncoast-crm-api"
               ensure_generated_value "${BASE}-password"
@@ -96,6 +113,7 @@ spec:
               ensure_declared_value "${BASE}-group-describe" "suncoast-crm-provider-workers-v1,suncoast-crm-email-validation-projectors-v1"
               ensure_value "${BASE}-cluster-describe" "true"
               ensure_generated_token "secret/platform-notification-service/clients/suncoast-crm-api"
+              ensure_generated_field "secret/suncoast-crm-api" "contact_purge_token"
 
               vault policy write suncoast-crm-api - <<'EOF'
               path "secret/data/suncoast-crm-api" {

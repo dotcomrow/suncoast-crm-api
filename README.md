@@ -31,6 +31,15 @@ dropping existing addresses and writes the verification state to a related
 `email_addresses`; the legacy scalar email and verification properties describe
 the primary address only.
 
+EspoCRM administrators also have a separate **Purge Contact** detail action.
+After an explicit destructive confirmation, it first removes the matching local
+subject mappings, email-address and verification rows, custom records,
+operations, outbox rows, entity, and cache entry. It then removes related
+`CContactEmail` records and the EspoCRM Contact. The action is protected by a
+dedicated internal token generated in Vault and is not available to regular CRM
+users. Use normal **Remove** when recreation and replay-state cleanup are not
+required.
+
 ## EspoCRM provider
 
 The adapter maps the stable entity families as follows:
@@ -79,6 +88,7 @@ The required Vault values are:
 | `secret/suncoast-crm-api:espocrm_admin_password` | Initial EspoCRM administrator password |
 | `secret/suncoast-crm-api:espocrm_database_password` | Generated/preserved database role password |
 | `secret/suncoast-crm-api:facade_database_password` | Generated/preserved facade database role password |
+| `secret/suncoast-crm-api:contact_purge_token` | Generated internal credential used only by the administrator purge action |
 | `secret/redis:password` | Existing Redis/Sentinel password |
 | Directus tunnel secret leaf paths | Reused only to reach the shared PostgreSQL host |
 

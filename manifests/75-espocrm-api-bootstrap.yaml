@@ -371,8 +371,10 @@ spec:
                 }')"
               request PUT /Settings /tmp/settings.json "$oidc_payload"
               test "$(jq -r '.authenticationMethod // empty' /tmp/settings.json)" = Oidc
+              request POST /Admin/action/clearCache /tmp/clear-cache.json '{}'
               unset ADMIN_AUTH OIDC_CLIENT_SECRET oidc_payload
               echo "EspoCRM API credentials and native Keycloak OIDC login are reconciled"
+              echo "Cleared EspoCRM cache after extension reconciliation"
           volumeMounts:
             - name: vault-root-token
               mountPath: /vault-token

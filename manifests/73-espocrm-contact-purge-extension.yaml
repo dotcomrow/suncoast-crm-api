@@ -1,0 +1,163 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: espocrm-contact-purge-extension
+  namespace: crm
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+data:
+  module.json: |
+    {
+      "order": 50
+    }
+  routes.json: |
+    [
+      {
+        "route": "/Contact/:id/purge",
+        "method": "post",
+        "actionClassName": "Espo\\Modules\\SuncoastContactPurge\\Api\\PostContactPurge"
+      }
+    ]
+  Contact.json: |
+    {
+      "detailActionList": [
+        "__APPEND__",
+        {
+          "label": "Purge Contact",
+          "name": "purgeContact",
+          "acl": "delete",
+          "aclScope": "Contact",
+          "handler": "module:suncoast-contact-purge/purge-handler",
+          "actionFunction": "purgeContact",
+          "groupIndex": 1,
+          "iconClass": "fas fa-trash-alt"
+        }
+      ]
+    }
+  purge-handler.js: |
+    define(['action-handler'], (ActionHandler) => {
+        return class extends ActionHandler {
+            async purgeContact() {
+                await this.view.confirm({
+                    message: 'Permanently remove this contact from EspoCRM and clear all Suncoast CRM identity, email verification, operation, and cache state? This cannot be undone.',
+                    confirmText: 'Purge Contact'
+                });
+
+                this.view.disableMenuItem('purgeContact');
+                Espo.Ui.notify('Purging contact...');
+
+                try {
+                    await Espo.Ajax.postRequest(`Contact/${this.view.model.id}/purge`, {
+                        confirmation: 'PURGE'
+                    });
+                    Espo.Ui.success('Contact fully purged');
+                    window.location.hash = '#Contact';
+                } catch (error) {
+                    this.view.enableMenuItem('purgeContact');
+                    throw error;
+                }
+            }
+        }
+    });
+  PostContactPurge.php: |
+    <?php
+
+    namespace Espo\Modules\SuncoastContactPurge\Api;
+
+    use Espo\Core\Api\Action;
+    use Espo\Core\Api\Request;
+    use Espo\Core\Api\Response;
+    use Espo\Core\Api\ResponseComposer;
+    use Espo\Core\Exceptions\BadRequest;
+    use Espo\Core\Exceptions\Error;
+    use Espo\Core\Exceptions\Forbidden;
+    use Espo\Entities\User;
+    use Espo\ORM\EntityManager;
+
+    class PostContactPurge implements Action
+    {
+        public function __construct(
+            private User $user,
+            private EntityManager $entityManager,
+        ) {}
+
+        public function process(Request $request): Response
+        {
+            if (!$this->user->isAdmin()) {
+                throw new Forbidden('Only EspoCRM administrators can purge contacts.');
+            }
+
+            $id = $request->getRouteParam('id');
+            $confirmation = $request->getParsedBody()->confirmation ?? null;
+            if (!is_string($id) || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $id)) {
+                throw new BadRequest('Invalid contact ID.');
+            }
+            if ($confirmation !== 'PURGE') {
+                throw new BadRequest('Purge confirmation is required.');
+            }
+
+            $contact = $this->entityManager->getRDBRepository('Contact')->getById($id);
+            if (!$contact) {
+                throw new BadRequest('Contact not found.');
+            }
+
+            $localResult = $this->purgeLocalState($id);
+            $emailRecordsDeleted = 0;
+            if ($this->entityManager->hasRepository('CContactEmail')) {
+                $emailRecords = $this->entityManager
+                    ->getRDBRepository('CContactEmail')
+                    ->where(['contactId' => $id])
+                    ->find();
+                foreach ($emailRecords as $emailRecord) {
+                    $this->entityManager->removeEntity($emailRecord);
+                    $emailRecordsDeleted++;
+                }
+            }
+            $this->entityManager->removeEntity($contact);
+
+            return ResponseComposer::json([
+                'purged' => true,
+                'providerId' => $id,
+                'providerEmailRecordsDeleted' => $emailRecordsDeleted,
+                'local' => $localResult->local ?? null,
+            ]);
+        }
+
+        private function purgeLocalState(string $providerId): object
+        {
+            $token = getenv('CONTACT_PURGE_TOKEN') ?: '';
+            $baseUrl = rtrim(getenv('SUNCOAST_CRM_INTERNAL_URL') ?: '', '/');
+            if ($token === '' || $baseUrl === '') {
+                throw new Error('Contact purge integration is not configured.');
+            }
+
+            $handle = curl_init($baseUrl . '/internal/admin/contacts/provider/' . rawurlencode($providerId) . '/purge');
+            if ($handle === false) {
+                throw new Error('Could not initialize the contact purge request.');
+            }
+            curl_setopt_array($handle, [
+                CURLOPT_CUSTOMREQUEST => 'POST',
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_TIMEOUT => 30,
+                CURLOPT_HTTPHEADER => [
+                    'Authorization: Bearer ' . $token,
+                    'Content-Type: application/json',
+                ],
+                CURLOPT_POSTFIELDS => json_encode(['confirmation' => 'PURGE']),
+            ]);
+            $body = curl_exec($handle);
+            $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+            $error = curl_error($handle);
+            curl_close($handle);
+
+            if (!is_string($body) || $status < 200 || $status >= 300) {
+                throw new Error('Suncoast CRM contact-state purge failed' . ($error !== '' ? ': ' . $error : " with HTTP {$status}."));
+            }
+            $decoded = json_decode($body);
+            if (!is_object($decoded)) {
+                throw new Error('Suncoast CRM contact-state purge returned an invalid response.');
+            }
+            return $decoded;
+        }
+    }

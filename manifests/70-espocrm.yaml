@@ -16,6 +16,8 @@ spec:
       remoteRef: { key: suncoast-crm-api, property: espocrm_database_password }
     - secretKey: ESPOCRM_ADMIN_PASSWORD
       remoteRef: { key: suncoast-crm-api, property: espocrm_admin_password }
+    - secretKey: CONTACT_PURGE_TOKEN
+      remoteRef: { key: suncoast-crm-api, property: contact_purge_token }
 ---
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
@@ -166,6 +168,23 @@ spec:
           command: ["sh", "-c", "mkdir -p /espocrm/custom /espocrm/client-custom"]
           volumeMounts: [{ name: espocrm-data, mountPath: /espocrm }]
           securityContext: { allowPrivilegeEscalation: false }
+        - name: install-contact-purge-extension
+          image: busybox:1.37
+          command: ["sh", "-ec"]
+          args:
+            - |
+              backend=/espocrm/custom/Espo/Modules/SuncoastContactPurge
+              frontend=/espocrm/client-custom/modules/suncoast-contact-purge
+              mkdir -p "$backend/Api" "$backend/Resources/metadata/clientDefs" "$frontend/src"
+              cp /extension/module.json "$backend/Resources/module.json"
+              cp /extension/routes.json "$backend/Resources/routes.json"
+              cp /extension/Contact.json "$backend/Resources/metadata/clientDefs/Contact.json"
+              cp /extension/PostContactPurge.php "$backend/Api/PostContactPurge.php"
+              cp /extension/purge-handler.js "$frontend/src/purge-handler.js"
+          volumeMounts:
+            - { name: espocrm-data, mountPath: /espocrm }
+            - { name: contact-purge-extension, mountPath: /extension, readOnly: true }
+          securityContext: { allowPrivilegeEscalation: false }
       containers:
         - name: database-tunnel
           image: alpine:3.20
@@ -200,6 +219,8 @@ spec:
             - { name: ESPOCRM_SITE_URL, value: "https://espocrm.teleport.app.suncoast.systems" }
             - { name: ESPOCRM_DATABASE_PASSWORD, valueFrom: { secretKeyRef: { name: espocrm-runtime, key: ESPOCRM_DATABASE_PASSWORD } } }
             - { name: ESPOCRM_ADMIN_PASSWORD, valueFrom: { secretKeyRef: { name: espocrm-runtime, key: ESPOCRM_ADMIN_PASSWORD } } }
+            - { name: CONTACT_PURGE_TOKEN, valueFrom: { secretKeyRef: { name: espocrm-runtime, key: CONTACT_PURGE_TOKEN } } }
+            - { name: SUNCOAST_CRM_INTERNAL_URL, value: "http://suncoast-crm-api.crm.svc.cluster.local:8080" }
           volumeMounts:
             - { name: espocrm-data, mountPath: /var/www/html/data }
             - { name: espocrm-data, mountPath: /var/www/html/custom, subPath: custom }
@@ -220,3 +241,5 @@ spec:
       volumes:
         - name: espocrm-data
           persistentVolumeClaim: { claimName: espocrm-data }
+        - name: contact-purge-extension
+          configMap: { name: espocrm-contact-purge-extension }
