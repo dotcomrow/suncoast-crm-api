@@ -20,7 +20,7 @@ spec:
       labels: { app: suncoast-crm-api, component: api }
       annotations:
         linkerd.io/inject: "enabled"
-        platform.suncoast.systems/image-revision: "82356264652f4d3cdc2f068669a2e1b0d0474106"
+        platform.suncoast.systems/image-revision: "37b60b33ed3b309ab4cb3986266d9286c5e69e2e"
     spec:
       serviceAccountName: suncoast-crm-api
       securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
@@ -66,7 +66,7 @@ spec:
       labels: { app: suncoast-crm-api, component: worker }
       annotations:
         linkerd.io/inject: "enabled"
-        platform.suncoast.systems/image-revision: "82356264652f4d3cdc2f068669a2e1b0d0474106"
+        platform.suncoast.systems/image-revision: "37b60b33ed3b309ab4cb3986266d9286c5e69e2e"
     spec:
       serviceAccountName: suncoast-crm-api
       securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
