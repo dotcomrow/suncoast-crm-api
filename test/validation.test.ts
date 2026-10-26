@@ -26,18 +26,15 @@ test("notification contact creation is idempotent per stable subject", () => {
 });
 
 test("external contacts receive stable unique placeholder names when no name is supplied", () => {
-  assert.deepEqual(externalContactProperties({ email: "user@example.com" }, "email:user@example.com"), {
-    firstname: "Notification",
-    lastname: "user"
-  });
-  assert.deepEqual(externalContactProperties({ email: "user@example.com", firstname: "Notification", lastname: "Subscriber" }, "email:user@example.com"), {
-    firstname: "Notification",
-    lastname: "user"
-  });
-  assert.deepEqual(externalContactProperties({ email: "other@example.com" }, "directus-user:user-1"), {
-    firstname: "Notification",
-    lastname: "Subscriber-c64a7289bd"
-  });
+  const emailSubject = externalContactProperties({ email: "user@example.com" }, "email:user@example.com");
+  const replay = externalContactProperties({ email: "user@example.com", firstname: "Notification", lastname: "Subscriber" }, "email:user@example.com");
+  const otherEmail = externalContactProperties({ email: "other@example.com" }, "email:other@example.com");
+  const directusUser = externalContactProperties({ email: "other@example.com" }, "directus-user:user-1");
+  assert.equal(emailSubject.firstname, "Notification");
+  assert.match(String(emailSubject.lastname), /^Subscriber-\d{12}$/);
+  assert.equal(replay.lastname, emailSubject.lastname);
+  assert.notEqual(otherEmail.lastname, emailSubject.lastname);
+  assert.match(String(directusUser.lastname), /^Subscriber-\d{12}$/);
   assert.deepEqual(externalContactProperties({ email: "user@example.com", firstName: "Pat", lastName: "Lee" }, "email:user@example.com"), {
     firstName: "Pat",
     lastName: "Lee"

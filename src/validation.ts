@@ -13,13 +13,10 @@ export function externalContactOperationIdempotencyKey(subjectId: string, purpos
 }
 
 function fallbackContactLastName(subjectId: string | undefined, email: unknown): string {
-  if (subjectId?.startsWith("email:") || !subjectId) {
-    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
-    const localPart = normalizedEmail.split("@", 1)[0]?.trim();
-    if (localPart) return localPart.slice(0, 100);
-  }
   const stableSubject = subjectId ?? `email:${String(email ?? "unknown").trim().toLowerCase()}`;
-  return `Subscriber-${createHash("sha256").update(stableSubject).digest("hex").slice(0, 10)}`;
+  const digest = createHash("sha256").update(stableSubject).digest();
+  const numericSuffix = (digest.readUIntBE(0, 6) % 1_000_000_000_000).toString().padStart(12, "0");
+  return `Subscriber-${numericSuffix}`;
 }
 
 export function externalContactProperties(properties: Record<string, unknown>, subjectId?: string): Record<string, unknown> {
