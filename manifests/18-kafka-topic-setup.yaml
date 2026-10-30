@@ -35,7 +35,7 @@ spec:
                 secretKeyRef: { name: suncoast-crm-api, key: KAFKA_SASL_PASSWORD }
             - { name: KAFKA_CONNECTION_TIMEOUT_SECONDS, value: "1500" }
             - { name: KAFKA_RETRY_INTERVAL_SECONDS, value: "5" }
-            - { name: KAFKA_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_REPLICATION_FACTOR, value: "3" }
           command: ["/bin/bash", "-lc"]
           args:
             - |
