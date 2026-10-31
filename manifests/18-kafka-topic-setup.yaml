@@ -104,7 +104,7 @@ spec:
                 fi
                 retry kafka_cli kafka-configs.sh --alter --entity-type topics \
                   --entity-name "$topic" \
-                  --add-config "cleanup.policy=delete,retention.ms=${retention_ms},segment.ms=${segment_ms},min.insync.replicas=1"
+                  --add-config "cleanup.policy=delete,retention.ms=${retention_ms},segment.ms=${segment_ms},min.insync.replicas=2"
                 kafka_cli kafka-topics.sh --describe --topic "$topic"
               }
 
