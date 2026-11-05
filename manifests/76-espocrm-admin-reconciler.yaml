@@ -10,14 +10,14 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "6"
 spec:
-  schedule: "*/1 * * * *"
+  schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 300
+      activeDeadlineSeconds: 600
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
@@ -57,26 +57,33 @@ spec:
 
                   request() {
                     method="$1"; path="$2"; output="$3"; payload="${4:-}"
+                    max_attempts=4
                     attempt=1
-                    while [ "$attempt" -le 8 ]; do
+                    while [ "$attempt" -le "$max_attempts" ]; do
                       if [ -n "$payload" ]; then
-                        status="$(curl -sS --connect-timeout 5 --max-time 20 -o "$output" -w '%{http_code}' -X "$method" \
+                        status="$(curl -sS --connect-timeout 5 --max-time 45 -o "$output" -w '%{http_code}' -X "$method" \
                           -H "Authorization: Basic $ADMIN_AUTH" -H 'Content-Type: application/json' \
                           --data "$payload" "$ESPO_BASE$path" || true)"
                       else
-                        status="$(curl -sS --connect-timeout 5 --max-time 20 -o "$output" -w '%{http_code}' -X "$method" \
+                        status="$(curl -sS --connect-timeout 5 --max-time 45 -o "$output" -w '%{http_code}' -X "$method" \
                           -H "Authorization: Basic $ADMIN_AUTH" "$ESPO_BASE$path" || true)"
                       fi
                       case "$status" in
                         2??) return 0 ;;
+                        000|408|429|5??) ;;
+                        *)
+                          echo "EspoCRM $method $path failed with non-retryable HTTP $status" >&2
+                          test ! -s "$output" || cat "$output" >&2
+                          exit 1
+                          ;;
                       esac
-                      if [ "$attempt" -lt 8 ]; then
+                      if [ "$attempt" -lt "$max_attempts" ]; then
                         echo "EspoCRM $method $path attempt $attempt failed with HTTP ${status:-000}; retrying" >&2
                         sleep 5
                       fi
                       attempt=$((attempt + 1))
                     done
-                    echo "EspoCRM $method $path failed after 8 attempts with HTTP ${status:-000}" >&2
+                    echo "EspoCRM $method $path failed after $max_attempts attempts with HTTP ${status:-000}" >&2
                     test ! -s "$output" || cat "$output" >&2
                     exit 1
                   }
