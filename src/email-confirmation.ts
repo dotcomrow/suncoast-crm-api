@@ -140,6 +140,11 @@ async function recoverFailedNotificationContactOperations(): Promise<void> {
 
 async function reconcileContactEmailProjection(verificationId: string): Promise<void> {
   await inTransaction(async (client) => {
+    const projectionLock = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_xact_lock(hashtext($1),hashtext($2)) AS locked",
+      ["suncoast-crm", "contact-email-projection"]
+    );
+    if (projectionLock.rows[0]?.locked !== true) return;
     const selected = await client.query(
       "SELECT * FROM crm_email_verifications WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
       [config().CRM_TENANT_ID, verificationId]
