@@ -11,7 +11,8 @@ export const pool = new Pool({
 });
 
 pool.on("error", (error) => {
-  console.error("Unexpected idle PostgreSQL client error; the pool will replace the connection", error);
+  const detail = error instanceof Error ? error.message : String(error);
+  console.error(`Unexpected idle PostgreSQL client error; the pool will replace the connection: ${detail}`);
 });
 
 export async function inTransaction<T>(work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
