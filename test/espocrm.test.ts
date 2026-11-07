@@ -90,6 +90,8 @@ test("EspoCRM adapter preserves multiple native emails and projects per-address 
     { emailAddress: "primary@example.com", primary: true, optOut: false, invalid: false },
     { emailAddress: "secondary@example.com", primary: false, optOut: true, invalid: false }
   ]);
+  assert.equal(contactUpdate.cEmailVerified, undefined);
+  assert.equal(contactUpdate.cEmailVerifiedAt, undefined);
   const projectionSearch = new URL(requests[2].url);
   assert.equal(projectionSearch.searchParams.get("where[0][attribute]"), "suncoastEmailId");
   assert.equal(projectionSearch.searchParams.get("select"), "id,suncoastEmailId");
@@ -100,6 +102,36 @@ test("EspoCRM adapter preserves multiple native emails and projects per-address 
   assert.equal(projectionCreate.suncoastEmailId, "email-1");
   assert.equal(projectionCreate.contactId, "contact-1");
   assert.equal(result.providerId, "email-record-1");
+});
+
+test("EspoCRM adapter projects primary email verification onto the Contact", async (t) => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ url: String(url), init });
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith("/Contact/contact-1") && !init?.method) {
+      return new Response(JSON.stringify({ id: "contact-1", emailAddressData: [] }), { status: 200 });
+    }
+    if (path.endsWith("/Contact/contact-1")) return new Response(JSON.stringify({ id: "contact-1" }), { status: 200 });
+    if (path.endsWith("/CContactEmail") && !init?.method) return new Response(JSON.stringify({ list: [], total: 0 }), { status: 200 });
+    return new Response(JSON.stringify({ id: "email-record-1" }), { status: 201 });
+  });
+  await new EspoCrmProvider("key", "https://crm.example.test", "cSuncoastCrmId").syncContactEmail("contact-1", {
+    id: "email-1",
+    tenantId: "suncoast",
+    entityId: "entity-1",
+    email: "primary@example.com",
+    purpose: "notifications",
+    status: "verified",
+    isPrimary: true,
+    verifiedAt: "2026-11-07T21:51:43.471Z",
+    providerId: null,
+    communicationsOptOut: false,
+    communicationsOptOutAt: null
+  });
+  const contactUpdate = JSON.parse(String(requests[1].init?.body));
+  assert.equal(contactUpdate.cEmailVerified, true);
+  assert.equal(contactUpdate.cEmailVerifiedAt, "2026-11-07 21:51:43");
 });
 
 test("EspoCRM adapter maps offset pagination to the stable cursor", async (t) => {

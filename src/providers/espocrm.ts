@@ -118,15 +118,20 @@ export class EspoCrmProvider implements CrmProvider {
       invalid: existing?.invalid === true
     });
     if (!emailAddressData.some((item) => item.primary)) emailAddressData[0]!.primary = true;
-    await this.request<EspoRecord>(`Contact/${encodeURIComponent(contactProviderId)}`, {
-      method: "PUT",
-      body: JSON.stringify({ emailAddressData })
-    });
-
-    const existingProjection = await this.findByField("CContactEmail", "suncoastEmailId", email.id, "id,suncoastEmailId");
     const verifiedAt = email.verifiedAt
       ? new Date(email.verifiedAt).toISOString().slice(0, 19).replace("T", " ")
       : null;
+    const contactProjection: Record<string, unknown> = { emailAddressData };
+    if (email.isPrimary) {
+      contactProjection.cEmailVerified = email.status === "verified";
+      contactProjection.cEmailVerifiedAt = email.status === "verified" ? verifiedAt : null;
+    }
+    await this.request<EspoRecord>(`Contact/${encodeURIComponent(contactProviderId)}`, {
+      method: "PUT",
+      body: JSON.stringify(contactProjection)
+    });
+
+    const existingProjection = await this.findByField("CContactEmail", "suncoastEmailId", email.id, "id,suncoastEmailId");
     const projection = {
       name: email.email,
       emailAddress: email.email,
