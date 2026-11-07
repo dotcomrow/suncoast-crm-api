@@ -27,7 +27,7 @@ data:
           "name": "purgeContact",
           "acl": "delete",
           "aclScope": "Contact",
-          "handler": "module:suncoast-contact-purge/purge-handler",
+          "handler": "module/suncoast-contact-purge/purge-handler",
           "actionFunction": "purgeContact",
           "groupIndex": 1,
           "iconClass": "fas fa-trash-alt"

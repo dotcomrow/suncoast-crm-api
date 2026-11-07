@@ -159,7 +159,9 @@ spec:
   template:
     metadata:
       labels: { app.kubernetes.io/name: espocrm, app.kubernetes.io/part-of: espocrm }
-      annotations: { linkerd.io/inject: "enabled" }
+      annotations:
+        linkerd.io/inject: "enabled"
+        platform.suncoast.systems/extension-revision: "purge-handler-module-path-v2"
     spec:
       securityContext: { fsGroup: 33, seccompProfile: { type: RuntimeDefault } }
       initContainers:
