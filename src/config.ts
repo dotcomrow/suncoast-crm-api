@@ -20,6 +20,8 @@ const env = z.object({
   KAFKA_CLIENT_ID: z.string().default("suncoast-crm-api"),
   KAFKA_CONSUMER_GROUP: z.string().default("suncoast-crm-provider-workers-v1"),
   KAFKA_EMAIL_VALIDATION_CONSUMER_GROUP: z.string().default("suncoast-crm-email-validation-projectors-v1"),
+  KAFKA_HEARTBEAT_CHECK_MS: z.coerce.number().int().positive().default(15000),
+  KAFKA_HEARTBEAT_STALE_MS: z.coerce.number().int().positive().default(60000),
   KAFKA_COMMAND_TOPIC: z.string().default("crm.commands.v1"),
   KAFKA_RETRY_TOPIC_1M: z.string().default("crm.commands.retry.1m.v1"),
   KAFKA_RETRY_TOPIC_5M: z.string().default("crm.commands.retry.5m.v1"),
@@ -49,12 +51,20 @@ const env = z.object({
   OUTBOX_POLL_MS: z.coerce.number().int().positive().default(1000),
   PROVIDER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(30),
   PROCESSING_LEASE_SECONDS: z.coerce.number().int().positive().default(300),
+  PENDING_OPERATION_RECOVERY_MS: z.coerce.number().int().positive().default(60000),
+  PENDING_OPERATION_REPLAY_AGE_SECONDS: z.coerce.number().int().positive().default(300),
   WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(8081)
 }).superRefine((value, ctx) => {
   if ((value.KAFKA_SASL_USERNAME && !value.KAFKA_SASL_PASSWORD) || (!value.KAFKA_SASL_USERNAME && value.KAFKA_SASL_PASSWORD)) {
     ctx.addIssue({ code: "custom", message: "Kafka username and password must be configured together" });
   }
   if (value.REDIS_CACHE_ENABLED && !value.REDIS_PASSWORD) ctx.addIssue({ code: "custom", message: "REDIS_PASSWORD is required when Redis caching is enabled" });
+  if (value.KAFKA_HEARTBEAT_CHECK_MS >= value.KAFKA_HEARTBEAT_STALE_MS) {
+    ctx.addIssue({ code: "custom", message: "KAFKA_HEARTBEAT_CHECK_MS must be less than KAFKA_HEARTBEAT_STALE_MS" });
+  }
+  if (value.PENDING_OPERATION_REPLAY_AGE_SECONDS < value.PROCESSING_LEASE_SECONDS) {
+    ctx.addIssue({ code: "custom", message: "PENDING_OPERATION_REPLAY_AGE_SECONDS must be at least PROCESSING_LEASE_SECONDS" });
+  }
 });
 
 export type Config = z.infer<typeof env>;

@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Consumer } from "kafkajs";
-import { runConsumerLoop, runKafkaJsConsumerUntilExit } from "../src/consumer-loop.js";
+import { ConsumerHeartbeatState, runConsumerLoop, runKafkaJsConsumerUntilExit } from "../src/consumer-loop.js";
+
+test("consumer heartbeat state detects stale and unavailable group membership", () => {
+  const heartbeat = new ConsumerHeartbeatState();
+  assert.equal(heartbeat.isReady(60_000, 100_000), false);
+  heartbeat.markJoined(100_000);
+  assert.equal(heartbeat.isReady(60_000, 159_999), true);
+  assert.equal(heartbeat.needsRestart(60_000, 160_001), true);
+  heartbeat.markHeartbeat(160_001);
+  assert.equal(heartbeat.isReady(60_000, 220_000), true);
+  heartbeat.markUnavailable();
+  assert.equal(heartbeat.isReady(60_000, 220_000), false);
+  assert.equal(heartbeat.needsRestart(60_000, 220_000), false);
+});
 
 test("KafkaJS session waits for an actual consumer exit event", async () => {
   const listeners = new Map<string, Set<() => void>>();

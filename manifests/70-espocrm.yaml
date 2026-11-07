@@ -237,6 +237,9 @@ spec:
             - { name: espocrm-data, mountPath: /var/www/html/data }
             - { name: espocrm-data, mountPath: /var/www/html/custom, subPath: custom }
             - { name: espocrm-data, mountPath: /var/www/html/client/custom, subPath: client-custom }
+          startupProbe: { exec: { command: ["sh", "-ec", "pgrep -f '^/usr/local/bin/php /var/www/html/daemon.php$' >/dev/null"] }, periodSeconds: 5, failureThreshold: 24 }
+          readinessProbe: { exec: { command: ["sh", "-ec", "pgrep -f '^/usr/local/bin/php /var/www/html/daemon.php$' >/dev/null"] }, periodSeconds: 20, timeoutSeconds: 3 }
+          livenessProbe: { exec: { command: ["sh", "-ec", "pgrep -f '^/usr/local/bin/php /var/www/html/daemon.php$' >/dev/null"] }, periodSeconds: 30, timeoutSeconds: 3 }
           securityContext: { allowPrivilegeEscalation: false }
       volumes:
         - name: espocrm-data

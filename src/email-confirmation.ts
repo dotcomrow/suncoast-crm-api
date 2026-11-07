@@ -11,7 +11,7 @@ import { queueOperation } from "./repository.js";
 import { externalContactProperties, externalContactSubjectId } from "./validation.js";
 import type { PoolClient } from "pg";
 import { getContactEmailForVerification, listContactEmails, setContactEmailProjection } from "./contact-emails.js";
-import { runConsumerLoop, runKafkaJsConsumerUntilExit } from "./consumer-loop.js";
+import { ConsumerHeartbeatState, runConsumerLoop, runKafkaJsConsumerUntilExit } from "./consumer-loop.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -29,6 +29,7 @@ const emailValidationEventSchema = z.object({
   validationId: z.string().uuid()
 });
 let shuttingDown = false;
+const consumerHeartbeat = new ConsumerHeartbeatState();
 
 async function syncContactEmailProjection(client: PoolClient, verification: Record<string, unknown>): Promise<string | null> {
   const contactEmail = await getContactEmailForVerification(client, config().CRM_TENANT_ID, String(verification.id));
@@ -161,6 +162,16 @@ async function reconcileContactEmailProjection(verificationId: string): Promise<
   });
 }
 
+app.get("/healthz", (_req, res) => res.status(shuttingDown ? 503 : 200).type("text").send(shuttingDown ? "shutting down" : "ok"));
+app.get("/readyz", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    return res.status(shuttingDown ? 503 : 200).type("text").send(shuttingDown ? "not ready" : "ready");
+  } catch {
+    return res.status(503).type("text").send("not ready");
+  }
+});
+
 app.get(confirmationPaths, (req, res) => {
   const code = typeof req.query.code === "string" ? req.query.code : "";
   if (!codePattern.test(code)) return res.status(400).type("html").send(page("Invalid confirmation link", "The confirmation code is not valid."));
@@ -217,9 +228,26 @@ app.use((_req, res) => res.status(404).type("text").send("Not found"));
 const server = app.listen(config().EMAIL_CONFIRMATION_PORT, "0.0.0.0", () => console.log(`Email confirmation listener on ${config().EMAIL_CONFIRMATION_PORT}`));
 const consumer = kafka().consumer({ groupId: config().KAFKA_EMAIL_VALIDATION_CONSUMER_GROUP, retry: { retries: config().PROVIDER_MAX_ATTEMPTS } });
 consumer.on(consumer.events.GROUP_JOIN, () => {
+  consumerHeartbeat.markJoined();
   console.log(`Email-validation projector joined ${config().KAFKA_EMAIL_VALIDATION_CONSUMER_GROUP}`);
   void reconcileSafely();
 });
+consumer.on(consumer.events.HEARTBEAT, () => { consumerHeartbeat.markHeartbeat(); });
+consumer.on(consumer.events.REBALANCING, () => { consumerHeartbeat.markUnavailable(); });
+consumer.on(consumer.events.CRASH, () => { consumerHeartbeat.markUnavailable(); });
+consumer.on(consumer.events.DISCONNECT, () => { consumerHeartbeat.markUnavailable(); });
+consumer.on(consumer.events.STOP, () => { consumerHeartbeat.markUnavailable(); });
+
+let watchdogDisconnecting = false;
+const heartbeatWatchdogTimer = setInterval(() => {
+  if (shuttingDown || watchdogDisconnecting || !consumerHeartbeat.needsRestart(config().KAFKA_HEARTBEAT_STALE_MS)) return;
+  watchdogDisconnecting = true;
+  console.error("Email-validation consumer heartbeat became stale; reconnecting the consumer");
+  void consumer.disconnect()
+    .catch((error) => console.error("Email-validation watchdog disconnect failed", error))
+    .finally(() => { watchdogDisconnecting = false; });
+}, config().KAFKA_HEARTBEAT_CHECK_MS);
+heartbeatWatchdogTimer.unref();
 
 async function reconcileSafely(): Promise<void> {
   try {
@@ -257,7 +285,7 @@ async function runEmailValidationConsumer(): Promise<void> {
     },
     disconnect: () => consumer.disconnect(),
     shouldStop: () => shuttingDown,
-    markUnavailable: () => undefined,
+    markUnavailable: () => { consumerHeartbeat.markUnavailable(); },
     onFailure: (error) => console.error("Email-validation consumer unavailable; retrying in 5 seconds", error),
     stoppedMessage: "Email-validation consumer stopped unexpectedly"
   });
@@ -272,6 +300,7 @@ async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(reconciliationTimer);
+  clearInterval(heartbeatWatchdogTimer);
   await consumer.disconnect().catch(() => undefined);
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await pool.end();

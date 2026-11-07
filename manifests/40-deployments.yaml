@@ -49,6 +49,9 @@ spec:
             - secretRef: { name: suncoast-crm-espocrm-provider }
             - secretRef: { name: suncoast-crm-database }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          startupProbe: { httpGet: { path: /healthz, port: confirmation }, periodSeconds: 5, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /readyz, port: confirmation }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: confirmation }, periodSeconds: 20, timeoutSeconds: 3 }
 ---
 apiVersion: apps/v1
 kind: Deployment

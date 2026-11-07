@@ -77,7 +77,7 @@ export async function queueOperation(input: QueueInput): Promise<{ id: string; s
   });
 }
 
-export async function requeuePendingOperations(): Promise<number> {
+export async function requeuePendingOperations(replayAgeSeconds = 300): Promise<number> {
   return inTransaction(async (client) => {
     const pending = await client.query<PendingOperation>(
       `SELECT operation.id,operation.tenant_id,operation.provider,operation.action,
@@ -89,8 +89,14 @@ export async function requeuePendingOperations(): Promise<number> {
            WHERE pending_outbox.aggregate_id=operation.id
              AND pending_outbox.published_at IS NULL
          )
+         AND NOT EXISTS (
+           SELECT 1 FROM crm_outbox recent_outbox
+           WHERE recent_outbox.aggregate_id=operation.id
+             AND recent_outbox.created_at > now() - make_interval(secs => $1)
+         )
        ORDER BY operation.created_at
-       FOR UPDATE OF operation SKIP LOCKED`
+       FOR UPDATE OF operation SKIP LOCKED`,
+      [replayAgeSeconds]
     );
     for (const operation of pending.rows) {
       const commandId = randomUUID();

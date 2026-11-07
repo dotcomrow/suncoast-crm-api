@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { config } from "./config.js";
 import { inTransaction, pool } from "./db.js";
-import { kafka, producer } from "./kafka.js";
+import { disconnectProducer, kafka, producer } from "./kafka.js";
 import { summarize } from "./ollama.js";
 import { providerFor } from "./providers/registry.js";
 import { ProviderError } from "./providers/provider.js";
@@ -12,9 +12,9 @@ import { requeuePendingOperations } from "./repository.js";
 import type { CrmCommand, CrmEntity } from "./types.js";
 import { commandSchema } from "./validation.js";
 import { cacheDelete, entityCacheKey } from "./cache.js";
-import { runConsumerLoop, runKafkaJsConsumerUntilExit } from "./consumer-loop.js";
+import { ConsumerHeartbeatState, runConsumerLoop, runKafkaJsConsumerUntilExit } from "./consumer-loop.js";
 
-let kafkaReady = false;
+const consumerHeartbeat = new ConsumerHeartbeatState();
 let shuttingDown = false;
 
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -180,7 +180,8 @@ const healthServer = createServer(async (request, response) => {
   if (request.url === "/readyz") {
     try {
       const schema = await pool.query("SELECT to_regclass('crm.crm_operations') AS operations, to_regclass('crm.crm_custom_object_records') AS custom_records");
-      const ready = kafkaReady && Boolean(schema.rows[0]?.operations) && Boolean(schema.rows[0]?.custom_records) && !shuttingDown;
+      const ready = consumerHeartbeat.isReady(config().KAFKA_HEARTBEAT_STALE_MS)
+        && Boolean(schema.rows[0]?.operations) && Boolean(schema.rows[0]?.custom_records) && !shuttingDown;
       response.writeHead(ready ? 200 : 503).end(ready ? "ready" : "not ready");
     } catch {
       response.writeHead(503).end("not ready");
@@ -194,13 +195,13 @@ healthServer.listen(config().WORKER_HEALTH_PORT, "0.0.0.0");
 const consumer = kafka().consumer({ groupId: config().KAFKA_CONSUMER_GROUP, retry: { retries: config().PROVIDER_MAX_ATTEMPTS } });
 let recoveryRunning = false;
 
-async function recoverPendingOperationsAfterJoin(): Promise<void> {
+async function recoverPendingOperationsSafely(reason: string): Promise<void> {
   if (recoveryRunning || shuttingDown) return;
   recoveryRunning = true;
   try {
     await recoverExpiredClaims();
-    const recovered = await requeuePendingOperations();
-    if (recovered > 0) console.log(`Requeued ${recovered} pending CRM operation(s) after Kafka group join`);
+    const recovered = await requeuePendingOperations(config().PENDING_OPERATION_REPLAY_AGE_SECONDS);
+    if (recovered > 0) console.log(`Requeued ${recovered} pending CRM operation(s) during ${reason} recovery`);
   } catch (error) {
     console.error("Pending CRM operation recovery failed", error);
   } finally {
@@ -209,21 +210,41 @@ async function recoverPendingOperationsAfterJoin(): Promise<void> {
 }
 
 consumer.on(consumer.events.GROUP_JOIN, () => {
-  kafkaReady = true;
-  void recoverPendingOperationsAfterJoin();
+  consumerHeartbeat.markJoined();
+  void recoverPendingOperationsSafely("Kafka group join");
 });
-consumer.on(consumer.events.REBALANCING, () => { kafkaReady = false; });
-consumer.on(consumer.events.CRASH, () => { kafkaReady = false; });
-consumer.on(consumer.events.DISCONNECT, () => { kafkaReady = false; });
-consumer.on(consumer.events.STOP, () => { kafkaReady = false; });
+consumer.on(consumer.events.HEARTBEAT, () => { consumerHeartbeat.markHeartbeat(); });
+consumer.on(consumer.events.REBALANCING, () => { consumerHeartbeat.markUnavailable(); });
+consumer.on(consumer.events.CRASH, () => { consumerHeartbeat.markUnavailable(); });
+consumer.on(consumer.events.DISCONNECT, () => { consumerHeartbeat.markUnavailable(); });
+consumer.on(consumer.events.STOP, () => { consumerHeartbeat.markUnavailable(); });
+
+let watchdogDisconnecting = false;
+const heartbeatWatchdogTimer = setInterval(() => {
+  if (shuttingDown || watchdogDisconnecting || !consumerHeartbeat.needsRestart(config().KAFKA_HEARTBEAT_STALE_MS)) return;
+  watchdogDisconnecting = true;
+  console.error("Kafka worker heartbeat became stale; reconnecting the consumer");
+  void consumer.disconnect()
+    .catch((error) => console.error("Kafka worker watchdog disconnect failed", error))
+    .finally(() => { watchdogDisconnecting = false; });
+}, config().KAFKA_HEARTBEAT_CHECK_MS);
+heartbeatWatchdogTimer.unref();
+
+const pendingRecoveryTimer = setInterval(
+  () => void recoverPendingOperationsSafely("periodic"),
+  config().PENDING_OPERATION_RECOVERY_MS
+);
+pendingRecoveryTimer.unref();
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  kafkaReady = false;
+  consumerHeartbeat.markUnavailable();
+  clearInterval(heartbeatWatchdogTimer);
+  clearInterval(pendingRecoveryTimer);
   healthServer.close();
   await consumer.disconnect().catch(() => undefined);
-  await (await producer()).disconnect().catch(() => undefined);
+  await disconnectProducer();
   await pool.end();
   process.exit(0);
 }
@@ -248,7 +269,7 @@ await runConsumerLoop({
     }),
   disconnect: () => consumer.disconnect(),
   shouldStop: () => shuttingDown,
-  markUnavailable: () => { kafkaReady = false; },
+  markUnavailable: () => { consumerHeartbeat.markUnavailable(); },
   onFailure: (error) => console.error("Kafka worker unavailable; retrying in 5 seconds", error),
   wait: delay,
   stoppedMessage: "Kafka consumer stopped unexpectedly"

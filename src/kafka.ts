@@ -3,6 +3,7 @@ import { config } from "./config.js";
 
 let kafkaInstance: Kafka | undefined;
 let producerInstance: Producer | undefined;
+let producerConnection: Promise<void> | undefined;
 export function kafka(): Kafka {
   if (kafkaInstance) return kafkaInstance;
   const cfg = config();
@@ -23,9 +24,39 @@ export function kafka(): Kafka {
   return kafkaInstance;
 }
 export async function producer(): Promise<Producer> {
-  if (!producerInstance) { producerInstance = kafka().producer({ allowAutoTopicCreation: false }); await producerInstance.connect(); }
-  return producerInstance;
+  if (!producerInstance) {
+    const created = kafka().producer({ allowAutoTopicCreation: false });
+    producerInstance = created;
+    producerConnection = created.connect().catch((error) => {
+      if (producerInstance === created) {
+        producerInstance = undefined;
+        producerConnection = undefined;
+      }
+      throw error;
+    });
+  }
+  const active = producerInstance;
+  await producerConnection;
+  return active;
+}
+export async function disconnectProducer(): Promise<void> {
+  const active = producerInstance;
+  const connection = producerConnection;
+  producerInstance = undefined;
+  producerConnection = undefined;
+  await connection?.catch(() => undefined);
+  await active?.disconnect().catch(() => undefined);
 }
 export async function publish(topic: string, key: string, value: unknown): Promise<void> {
-  await (await producer()).send({ acks: -1, topic, messages: [{ key, value: JSON.stringify(value), headers: { "content-type": "application/json", "schema-version": "1" } }] });
+  const active = await producer();
+  try {
+    await active.send({ acks: -1, topic, messages: [{ key, value: JSON.stringify(value), headers: { "content-type": "application/json", "schema-version": "1" } }] });
+  } catch (error) {
+    if (producerInstance === active) {
+      producerInstance = undefined;
+      producerConnection = undefined;
+      await active.disconnect().catch(() => undefined);
+    }
+    throw error;
+  }
 }

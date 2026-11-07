@@ -15,6 +15,33 @@ export interface ConsumerLoopOptions {
 
 const defaultWait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
+export class ConsumerHeartbeatState {
+  private joined = false;
+  private lastHeartbeatAt = 0;
+
+  markJoined(at = Date.now()): void {
+    this.joined = true;
+    this.lastHeartbeatAt = at;
+  }
+
+  markHeartbeat(at = Date.now()): void {
+    if (!this.joined) return;
+    this.lastHeartbeatAt = at;
+  }
+
+  markUnavailable(): void {
+    this.joined = false;
+  }
+
+  isReady(staleAfterMs: number, at = Date.now()): boolean {
+    return this.joined && at - this.lastHeartbeatAt <= staleAfterMs;
+  }
+
+  needsRestart(staleAfterMs: number, at = Date.now()): boolean {
+    return this.joined && at - this.lastHeartbeatAt > staleAfterMs;
+  }
+}
+
 export async function runKafkaJsConsumerUntilExit(consumer: Consumer, config: ConsumerRunConfig): Promise<void> {
   let signalExit: (() => void) | undefined;
   const exited = new Promise<void>((resolve) => { signalExit = resolve; });

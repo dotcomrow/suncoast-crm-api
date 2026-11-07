@@ -14,6 +14,7 @@ import { createEmailVerification, emailVerificationBody, expireDueEmailVerificat
 import { resolveContactSubject, setContactEmailCommunicationsPreference } from "./contact-emails.js";
 import { purgeContactByProviderId } from "./contact-purge.js";
 import { contactPurgeAuthorized } from "./internal-auth.js";
+import { disconnectProducer } from "./kafka.js";
 
 const app = express();
 app.disable("x-powered-by"); app.use(helmet()); app.use(express.json({ limit: "1mb" }));
@@ -96,5 +97,5 @@ expiryTimer.unref();
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => {
   clearInterval(expiryTimer);
   stopOutbox();
-  server.close(() => void pool.end().finally(() => process.exit(0)));
+  server.close(() => void Promise.allSettled([pool.end(), disconnectProducer()]).finally(() => process.exit(0)));
 });
