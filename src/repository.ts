@@ -122,6 +122,55 @@ export async function requeuePendingOperations(replayAgeSeconds = 300): Promise<
   });
 }
 
+export async function requeueMissingProviderContact(tenantId: string, entityId: string): Promise<{ requeued: boolean; operationId?: string }> {
+  return inTransaction(async (client) => {
+    const selected = await client.query<PendingOperation & { status: string }>(
+      `SELECT id,tenant_id,provider,action,entity_type,entity_id,request,correlation_id,status
+       FROM crm_operations
+       WHERE tenant_id=$1 AND entity_id=$2 AND action='create' AND entity_type='contacts'
+       ORDER BY created_at
+       LIMIT 1
+       FOR UPDATE`,
+      [tenantId, entityId]
+    );
+    const operation = selected.rows[0];
+    if (!operation || operation.status !== "succeeded") return { requeued: false };
+
+    const commandId = randomUUID();
+    const command: CrmCommand = {
+      schemaVersion: 1,
+      id: commandId,
+      operationId: operation.id,
+      tenantId: operation.tenant_id,
+      provider: operation.provider,
+      action: operation.action,
+      entityType: operation.entity_type ?? undefined,
+      entityId: operation.entity_id ?? undefined,
+      payload: operation.request,
+      correlationId: `missing-provider-contact:${operation.correlation_id}`,
+      requestedAt: new Date().toISOString()
+    };
+    await client.query(
+      `UPDATE crm_operations
+       SET status='queued',attempts=0,started_at=NULL,finished_at=NULL,error=NULL,result=NULL,
+           correlation_id=$2
+       WHERE id=$1`,
+      [operation.id, command.correlationId]
+    );
+    await client.query(
+      `UPDATE crm_contact_emails
+       SET provider_id=NULL,projected_at=NULL,updated_at=now()
+       WHERE tenant_id=$1 AND entity_id=$2`,
+      [tenantId, entityId]
+    );
+    await client.query(
+      "INSERT INTO crm_outbox (id,aggregate_id,topic,message_key,payload) VALUES ($1,$2,$3,$4,$5)",
+      [commandId, operation.id, config().KAFKA_COMMAND_TOPIC, operation.tenant_id, command]
+    );
+    return { requeued: true, operationId: operation.id };
+  });
+}
+
 function entityResponse(row: Record<string, unknown>) {
   return {
     id: row.id, type: row.entity_type, provider: row.provider, provider_id: row.provider_id,

@@ -6,7 +6,7 @@ import { config } from "./config.js";
 import { pool } from "./db.js";
 import { openApiSpec } from "./openapi.js";
 import { runOutbox, stopOutbox } from "./outbox.js";
-import { getEntity, getOperation, listEntities, queueOperation } from "./repository.js";
+import { getEntity, getOperation, listEntities, queueOperation, requeueMissingProviderContact } from "./repository.js";
 import { assertContact, assertCustomRecordCardinality, customRecordBody, customRecordUpdateBody, getCustomObjectDefinition, getCustomRecord, listCustomObjectDefinitions, listCustomRecords, validateCustomProperties } from "./custom-objects.js";
 import { aiBody, contactCommunicationPreferenceBody, entityBody, externalContactOperationIdempotencyKey, externalContactProperties, externalContactSignupBody, externalContactSubjectId, updateBody } from "./validation.js";
 import { entityTypes, type EntityType } from "./types.js";
@@ -15,6 +15,7 @@ import { resolveContactSubject, setContactEmailCommunicationsPreference } from "
 import { purgeContactByProviderId } from "./contact-purge.js";
 import { contactPurgeAuthorized } from "./internal-auth.js";
 import { disconnectProducer } from "./kafka.js";
+import { providerFor } from "./providers/registry.js";
 
 const app = express();
 app.disable("x-powered-by"); app.use(helmet()); app.use(express.json({ limit: "1mb" }));
@@ -50,7 +51,21 @@ app.post("/v1/external-signups/contacts", async (req, res) => {
   const contact = await resolveContactSubject(h.tenantId, subjectId, email);
   const entityId = contact.entityId;
   const contactIdempotencyKey = externalContactOperationIdempotencyKey(subjectId, body.purpose, h.idempotencyKey);
-  const result = await queueOperation({ ...h, idempotencyKey: contactIdempotencyKey, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties, associations: body.associations }, retryFailed: true });
+  let result = await queueOperation({ ...h, idempotencyKey: contactIdempotencyKey, provider: config().CRM_PROVIDER, action: "create", entityType: "contacts", entityId, payload: { properties, associations: body.associations }, retryFailed: true });
+  if (result.duplicate && result.status === "succeeded" && result.entityId) {
+    const local = await pool.query(
+      "SELECT provider_id FROM crm_entities WHERE tenant_id=$1 AND entity_type='contacts' AND id=$2 AND deleted_at IS NULL",
+      [h.tenantId, result.entityId]
+    );
+    const providerId = local.rows[0]?.provider_id ? String(local.rows[0].provider_id) : null;
+    if (providerId && !(await providerFor(config().CRM_PROVIDER).get("contacts", providerId))) {
+      const recovery = await requeueMissingProviderContact(h.tenantId, result.entityId);
+      if (recovery.requeued) {
+        console.warn(`Requeued missing provider contact ${result.entityId} from operation ${recovery.operationId}`);
+        result = { ...result, status: "queued" };
+      }
+    }
+  }
   const verification = await createEmailVerification(email, body.purpose, `${h.idempotencyKey}:email`, String(result.entityId ?? entityId), body.primary_email);
   res.status(202).json({ ...queuedResponse(result), entity_id: result.entityId, email_verification: verification });
 });

@@ -161,3 +161,74 @@ data:
             return $decoded;
         }
     }
+  PurgeLocalState.php: |
+    <?php
+
+    namespace Espo\Modules\SuncoastContactPurge\Hooks\Contact;
+
+    use Espo\Core\Exceptions\Error;
+    use Espo\Core\Hook\Hook\BeforeRemove;
+    use Espo\ORM\Entity;
+    use Espo\ORM\EntityManager;
+    use Espo\ORM\Repository\Option\RemoveOptions;
+
+    class PurgeLocalState implements BeforeRemove
+    {
+        public static int $order = 1;
+
+        public function __construct(private EntityManager $entityManager) {}
+
+        public function beforeRemove(Entity $entity, RemoveOptions $options): void
+        {
+            $suncoastId = $entity->get('cSuncoastCrmId');
+            if (!is_string($suncoastId) || $suncoastId === '') {
+                return;
+            }
+
+            $this->purgeLocalState($entity->getId());
+
+            if (!$this->entityManager->hasRepository('CContactEmail')) {
+                return;
+            }
+            $emailRecords = $this->entityManager
+                ->getRDBRepository('CContactEmail')
+                ->where(['contactId' => $entity->getId()])
+                ->find();
+            foreach ($emailRecords as $emailRecord) {
+                $this->entityManager->removeEntity($emailRecord);
+            }
+        }
+
+        private function purgeLocalState(string $providerId): void
+        {
+            $token = getenv('CONTACT_PURGE_TOKEN') ?: '';
+            $baseUrl = rtrim(getenv('SUNCOAST_CRM_INTERNAL_URL') ?: '', '/');
+            if ($token === '' || $baseUrl === '') {
+                throw new Error('Contact purge integration is not configured.');
+            }
+
+            $handle = curl_init($baseUrl . '/internal/admin/contacts/provider/' . rawurlencode($providerId) . '/purge');
+            if ($handle === false) {
+                throw new Error('Could not initialize the contact purge request.');
+            }
+            curl_setopt_array($handle, [
+                CURLOPT_CUSTOMREQUEST => 'POST',
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_TIMEOUT => 30,
+                CURLOPT_HTTPHEADER => [
+                    'Authorization: Bearer ' . $token,
+                    'Content-Type: application/json',
+                ],
+                CURLOPT_POSTFIELDS => json_encode(['confirmation' => 'PURGE']),
+            ]);
+            $body = curl_exec($handle);
+            $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+            $error = curl_error($handle);
+            curl_close($handle);
+
+            if (!is_string($body) || $status < 200 || $status >= 300) {
+                throw new Error('Suncoast CRM contact-state purge failed' . ($error !== '' ? ': ' . $error : " with HTTP {$status}."));
+            }
+        }
+    }

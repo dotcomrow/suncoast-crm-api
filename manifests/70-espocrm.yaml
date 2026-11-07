@@ -175,11 +175,12 @@ spec:
             - |
               backend=/espocrm/custom/Espo/Modules/SuncoastContactPurge
               frontend=/espocrm/client-custom/modules/suncoast-contact-purge
-              mkdir -p "$backend/Api" "$backend/Resources/metadata/clientDefs" "$frontend/src"
+              mkdir -p "$backend/Api" "$backend/Hooks/Contact" "$backend/Resources/metadata/clientDefs" "$frontend/src"
               cp /extension/module.json "$backend/Resources/module.json"
               cp /extension/routes.json "$backend/Resources/routes.json"
               cp /extension/Contact.json "$backend/Resources/metadata/clientDefs/Contact.json"
               cp /extension/PostContactPurge.php "$backend/Api/PostContactPurge.php"
+              cp /extension/PurgeLocalState.php "$backend/Hooks/Contact/PurgeLocalState.php"
               cp /extension/purge-handler.js "$frontend/src/purge-handler.js"
           volumeMounts:
             - { name: espocrm-data, mountPath: /espocrm }
