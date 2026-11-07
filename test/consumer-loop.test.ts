@@ -1,6 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runConsumerLoop } from "../src/consumer-loop.js";
+import type { Consumer } from "kafkajs";
+import { runConsumerLoop, runKafkaJsConsumerUntilExit } from "../src/consumer-loop.js";
+
+test("KafkaJS session waits for an actual consumer exit event", async () => {
+  const listeners = new Map<string, Set<() => void>>();
+  const events = {
+    CRASH: "consumer.crash",
+    STOP: "consumer.stop",
+    DISCONNECT: "consumer.disconnect"
+  } as const;
+  const consumer = {
+    events,
+    on: (eventName: string, listener: () => void) => {
+      const eventListeners = listeners.get(eventName) ?? new Set<() => void>();
+      eventListeners.add(listener);
+      listeners.set(eventName, eventListeners);
+      return () => { eventListeners.delete(listener); };
+    },
+    run: async () => undefined
+  } as unknown as Consumer;
+
+  let settled = false;
+  const session = runKafkaJsConsumerUntilExit(consumer, {}).then(() => { settled = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  for (const listener of listeners.get(events.CRASH) ?? []) listener();
+  await session;
+  assert.equal(settled, true);
+});
 
 test("consumer loop reconnects when a running consumer stops unexpectedly", async () => {
   let stopped = false;

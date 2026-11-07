@@ -11,7 +11,7 @@ import { queueOperation } from "./repository.js";
 import { externalContactProperties, externalContactSubjectId } from "./validation.js";
 import type { PoolClient } from "pg";
 import { getContactEmailForVerification, listContactEmails, setContactEmailProjection } from "./contact-emails.js";
-import { runConsumerLoop } from "./consumer-loop.js";
+import { runConsumerLoop, runKafkaJsConsumerUntilExit } from "./consumer-loop.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -231,7 +231,7 @@ async function runEmailValidationConsumer(): Promise<void> {
     subscribe: () => consumer.subscribe({ topic: config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC, fromBeginning: false }),
     run: () => {
       console.log(`Email-validation projector subscribed to ${config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC}`);
-      return consumer.run({
+      return runKafkaJsConsumerUntilExit(consumer, {
         eachMessage: async ({ message }) => {
           if (!message.value) return;
           const parsedJson = (() => { try { return JSON.parse(message.value.toString()) as unknown; } catch { return null; } })();

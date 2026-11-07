@@ -1,3 +1,5 @@
+import type { Consumer, ConsumerRunConfig } from "kafkajs";
+
 export interface ConsumerLoopOptions {
   connect: () => Promise<void>;
   subscribe: () => Promise<void>;
@@ -12,6 +14,22 @@ export interface ConsumerLoopOptions {
 }
 
 const defaultWait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+export async function runKafkaJsConsumerUntilExit(consumer: Consumer, config: ConsumerRunConfig): Promise<void> {
+  let signalExit: (() => void) | undefined;
+  const exited = new Promise<void>((resolve) => { signalExit = resolve; });
+  const removeCrash = consumer.on(consumer.events.CRASH, () => signalExit?.());
+  const removeStop = consumer.on(consumer.events.STOP, () => signalExit?.());
+  const removeDisconnect = consumer.on(consumer.events.DISCONNECT, () => signalExit?.());
+  try {
+    await consumer.run(config);
+    await exited;
+  } finally {
+    removeCrash();
+    removeStop();
+    removeDisconnect();
+  }
+}
 
 export async function runConsumerLoop(options: ConsumerLoopOptions): Promise<void> {
   const wait = options.wait ?? defaultWait;

@@ -12,7 +12,7 @@ import { requeuePendingOperations } from "./repository.js";
 import type { CrmCommand, CrmEntity } from "./types.js";
 import { commandSchema } from "./validation.js";
 import { cacheDelete, entityCacheKey } from "./cache.js";
-import { runConsumerLoop } from "./consumer-loop.js";
+import { runConsumerLoop, runKafkaJsConsumerUntilExit } from "./consumer-loop.js";
 
 let kafkaReady = false;
 let shuttingDown = false;
@@ -233,7 +233,7 @@ await recoverExpiredClaims();
 await runConsumerLoop({
   connect: () => consumer.connect(),
   subscribe: () => consumer.subscribe({ topics: commandTopics(), fromBeginning: false }),
-  run: () => consumer.run({
+  run: () => runKafkaJsConsumerUntilExit(consumer, {
       eachMessage: async ({ message }) => {
         if (!message.value) return;
         const raw = message.value.toString();
