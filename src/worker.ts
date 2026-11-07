@@ -8,14 +8,16 @@ import { providerFor } from "./providers/registry.js";
 import { ProviderError } from "./providers/provider.js";
 import { commandTopics, retryScheduleForAttempt } from "./retry.js";
 import { getCustomObjectDefinition, getCustomRecord, persistCustomRecord } from "./custom-objects.js";
+import { requeuePendingOperations } from "./repository.js";
 import type { CrmCommand, CrmEntity } from "./types.js";
 import { commandSchema } from "./validation.js";
 import { cacheDelete, entityCacheKey } from "./cache.js";
+import { runConsumerLoop } from "./consumer-loop.js";
 
 let kafkaReady = false;
 let shuttingDown = false;
 
-const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 async function claimOperation(operationId: string): Promise<number | null> {
   for (;;) {
@@ -190,6 +192,30 @@ const healthServer = createServer(async (request, response) => {
 healthServer.listen(config().WORKER_HEALTH_PORT, "0.0.0.0");
 
 const consumer = kafka().consumer({ groupId: config().KAFKA_CONSUMER_GROUP, retry: { retries: config().PROVIDER_MAX_ATTEMPTS } });
+let recoveryRunning = false;
+
+async function recoverPendingOperationsAfterJoin(): Promise<void> {
+  if (recoveryRunning || shuttingDown) return;
+  recoveryRunning = true;
+  try {
+    await recoverExpiredClaims();
+    const recovered = await requeuePendingOperations();
+    if (recovered > 0) console.log(`Requeued ${recovered} pending CRM operation(s) after Kafka group join`);
+  } catch (error) {
+    console.error("Pending CRM operation recovery failed", error);
+  } finally {
+    recoveryRunning = false;
+  }
+}
+
+consumer.on(consumer.events.GROUP_JOIN, () => {
+  kafkaReady = true;
+  void recoverPendingOperationsAfterJoin();
+});
+consumer.on(consumer.events.REBALANCING, () => { kafkaReady = false; });
+consumer.on(consumer.events.CRASH, () => { kafkaReady = false; });
+consumer.on(consumer.events.DISCONNECT, () => { kafkaReady = false; });
+consumer.on(consumer.events.STOP, () => { kafkaReady = false; });
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
@@ -204,12 +230,10 @@ async function shutdown(): Promise<void> {
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void shutdown());
 
 await recoverExpiredClaims();
-while (!shuttingDown) {
-  try {
-    await consumer.connect();
-    await consumer.subscribe({ topics: commandTopics(), fromBeginning: false });
-    kafkaReady = true;
-    await consumer.run({
+await runConsumerLoop({
+  connect: () => consumer.connect(),
+  subscribe: () => consumer.subscribe({ topics: commandTopics(), fromBeginning: false }),
+  run: () => consumer.run({
       eachMessage: async ({ message }) => {
         if (!message.value) return;
         const raw = message.value.toString();
@@ -221,13 +245,11 @@ while (!shuttingDown) {
         }
         await processCommand(parsed.data);
       }
-    });
-    break;
-  } catch (error) {
-    kafkaReady = false;
-    if (shuttingDown) break;
-    console.error("Kafka worker connection failed; retrying in 5 seconds", error);
-    await consumer.disconnect().catch(() => undefined);
-    await delay(5000);
-  }
-}
+    }),
+  disconnect: () => consumer.disconnect(),
+  shouldStop: () => shuttingDown,
+  markUnavailable: () => { kafkaReady = false; },
+  onFailure: (error) => console.error("Kafka worker unavailable; retrying in 5 seconds", error),
+  wait: delay,
+  stoppedMessage: "Kafka consumer stopped unexpectedly"
+});

@@ -11,6 +11,7 @@ import { queueOperation } from "./repository.js";
 import { externalContactProperties, externalContactSubjectId } from "./validation.js";
 import type { PoolClient } from "pg";
 import { getContactEmailForVerification, listContactEmails, setContactEmailProjection } from "./contact-emails.js";
+import { runConsumerLoop } from "./consumer-loop.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -210,6 +211,10 @@ app.use((_req, res) => res.status(404).type("text").send("Not found"));
 
 const server = app.listen(config().EMAIL_CONFIRMATION_PORT, "0.0.0.0", () => console.log(`Email confirmation listener on ${config().EMAIL_CONFIRMATION_PORT}`));
 const consumer = kafka().consumer({ groupId: config().KAFKA_EMAIL_VALIDATION_CONSUMER_GROUP, retry: { retries: config().PROVIDER_MAX_ATTEMPTS } });
+consumer.on(consumer.events.GROUP_JOIN, () => {
+  console.log(`Email-validation projector joined ${config().KAFKA_EMAIL_VALIDATION_CONSUMER_GROUP}`);
+  void reconcileSafely();
+});
 
 async function reconcileSafely(): Promise<void> {
   try {
@@ -221,12 +226,12 @@ async function reconcileSafely(): Promise<void> {
 }
 
 async function runEmailValidationConsumer(): Promise<void> {
-  while (!shuttingDown) {
-    try {
-      await consumer.connect();
-      await consumer.subscribe({ topic: config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC, fromBeginning: false });
+  await runConsumerLoop({
+    connect: () => consumer.connect(),
+    subscribe: () => consumer.subscribe({ topic: config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC, fromBeginning: false }),
+    run: () => {
       console.log(`Email-validation projector subscribed to ${config().KAFKA_EMAIL_VALIDATION_EVENT_TOPIC}`);
-      await consumer.run({
+      return consumer.run({
         eachMessage: async ({ message }) => {
           if (!message.value) return;
           const parsedJson = (() => { try { return JSON.parse(message.value.toString()) as unknown; } catch { return null; } })();
@@ -244,14 +249,13 @@ async function runEmailValidationConsumer(): Promise<void> {
           }
         }
       });
-      break;
-    } catch (error) {
-      if (shuttingDown) break;
-      console.error("Email-validation consumer connection failed; retrying in 5 seconds", error);
-      await consumer.disconnect().catch(() => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
-  }
+    },
+    disconnect: () => consumer.disconnect(),
+    shouldStop: () => shuttingDown,
+    markUnavailable: () => undefined,
+    onFailure: (error) => console.error("Email-validation consumer unavailable; retrying in 5 seconds", error),
+    stoppedMessage: "Email-validation consumer stopped unexpectedly"
+  });
 }
 
 void reconcileSafely();

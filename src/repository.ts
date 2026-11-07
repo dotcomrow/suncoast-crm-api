@@ -14,6 +14,17 @@ export interface QueueInput {
 
 interface OperationIdentity { id: string; status: string; entity_id: string | null; action: CommandAction; entity_type: string | null; request: Record<string, unknown> }
 
+interface PendingOperation {
+  id: string;
+  tenant_id: string;
+  provider: string;
+  action: CommandAction;
+  entity_type: string | null;
+  entity_id: string | null;
+  request: Record<string, unknown>;
+  correlation_id: string;
+}
+
 export async function queueOperation(input: QueueInput): Promise<{ id: string; status: string; entityId?: string; duplicate: boolean }> {
   return inTransaction(async (client) => {
     const operationId = randomUUID();
@@ -63,6 +74,45 @@ export async function queueOperation(input: QueueInput): Promise<{ id: string; s
     await client.query("INSERT INTO crm_outbox (id, aggregate_id, topic, message_key, payload) VALUES ($1,$2,$3,$4,$5)",
       [commandId, operationId, config().KAFKA_COMMAND_TOPIC, input.tenantId, command]);
     return { id: operationId, status: "queued", entityId: input.entityId, duplicate: false };
+  });
+}
+
+export async function requeuePendingOperations(): Promise<number> {
+  return inTransaction(async (client) => {
+    const pending = await client.query<PendingOperation>(
+      `SELECT operation.id,operation.tenant_id,operation.provider,operation.action,
+              operation.entity_type,operation.entity_id,operation.request,operation.correlation_id
+       FROM crm_operations operation
+       WHERE operation.status IN ('queued','retrying')
+         AND NOT EXISTS (
+           SELECT 1 FROM crm_outbox pending_outbox
+           WHERE pending_outbox.aggregate_id=operation.id
+             AND pending_outbox.published_at IS NULL
+         )
+       ORDER BY operation.created_at
+       FOR UPDATE OF operation SKIP LOCKED`
+    );
+    for (const operation of pending.rows) {
+      const commandId = randomUUID();
+      const command: CrmCommand = {
+        schemaVersion: 1,
+        id: commandId,
+        operationId: operation.id,
+        tenantId: operation.tenant_id,
+        provider: operation.provider,
+        action: operation.action,
+        entityType: operation.entity_type ?? undefined,
+        entityId: operation.entity_id ?? undefined,
+        payload: operation.request,
+        correlationId: operation.correlation_id,
+        requestedAt: new Date().toISOString()
+      };
+      await client.query(
+        "INSERT INTO crm_outbox (id,aggregate_id,topic,message_key,payload) VALUES ($1,$2,$3,$4,$5)",
+        [commandId, operation.id, config().KAFKA_COMMAND_TOPIC, operation.tenant_id, command]
+      );
+    }
+    return pending.rowCount ?? 0;
   });
 }
 
