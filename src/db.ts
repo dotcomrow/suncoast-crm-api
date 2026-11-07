@@ -10,6 +10,10 @@ export const pool = new Pool({
   application_name: "suncoast-crm-api"
 });
 
+pool.on("error", (error) => {
+  console.error("Unexpected idle PostgreSQL client error; the pool will replace the connection", error);
+});
+
 export async function inTransaction<T>(work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
