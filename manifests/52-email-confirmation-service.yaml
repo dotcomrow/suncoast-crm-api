@@ -27,7 +27,7 @@ metadata:
     gravitee.io/definition-labels: "external,email-confirmation"
     gravitee.io/definition-categories: "platform"
     gravitee.io/definition-path-mappings: "/crm-email-confirmation,/crm-email-confirmation/confirm-email"
-    gravitee.io/definition-endpoint-groups: '[{"name":"default","type":"http-proxy","endpoints":[{"name":"confirmation-http","type":"http-proxy","weight":1,"configuration":{"target":"http://suncoast-crm-email-confirmation.crm.svc.cluster.local:8082"},"secondary":false}]}]'
+    gravitee.io/definition-endpoint-groups: '[{"name":"default","type":"http-proxy","endpoints":[{"name":"confirmation-http","type":"http-proxy","weight":1,"inheritConfiguration":true,"configuration":{"target":"http://suncoast-crm-email-confirmation.crm.svc.cluster.local:8082"},"secondary":false}]}]'
     gravitee.io/definition-plans: '{"open-access":{"name":"Open access","description":"One-time confirmation codes are the sole authorization mechanism","security":{"type":"KEY_LESS"},"status":"PUBLISHED","validation":"AUTO","type":"API","selectionRule":"true"}}'
     gravitee.io/definition-flows: '[]'
     gravitee.io/definition-response-templates: '{}'
